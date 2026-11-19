@@ -1,0 +1,44 @@
+name: NinMagic Shop build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  switch:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64@sha256:1fc388c3a0d34bd2045a6dadcb1020e069d5f876a187fd705de14b4440c00282
+    steps:
+      - uses: actions/checkout@v6
+      - name: Trust this checkout directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Build with project-local pinned libnx
+        shell: bash
+        env:
+          NINMAGIC_BUILD_JOBS: '4'
+          NINMAGIC_SOURCE_COMMIT: ${{ github.sha }}
+          NINMAGIC_SOURCE_BRANCH: ${{ github.ref_name }}
+        run: bash tools/build.sh "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/build/Shop"
+      - name: Test HTTP ranges and catalog parsers
+        run: |
+          python3 tools/test-transport.py
+          python3 tools/test-ownfoil.py --yyjson build/Shop/_deps/yyjson-src/src
+          python3 tools/test-updater.py --yyjson build/Shop/_deps/yyjson-src/src
+      - name: Verify standalone executable
+        run: python3 tools/verify.py build/Shop/NinMagic-Shop.nro --output build/Shop/verification.json
+      - name: Reject malformed release candidates
+        run: python3 tools/test-verifier.py build/Shop/NinMagic-Shop.nro
+      - name: Package application and licenses
+        run: python3 tools/package.py build/Shop/NinMagic-Shop.nro --build-dir build/Shop --devkitpro "$DEVKITPRO"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NinMagic-Shop
+          path: |
+            dist/NinMagic-Shop-*.zip
+            dist/NinMagic-Shop-*.zip.sha256
+            build/Shop/verification.json

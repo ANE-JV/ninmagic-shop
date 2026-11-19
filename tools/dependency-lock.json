@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "dependencies": [
+    {
+      "name": "dr_libs",
+      "repository": "https://github.com/mackron/dr_libs.git",
+      "commit": "b962384395249f54168d5f5f175c47bd7b39dc1d"
+    },
+    {
+      "name": "libnxtc",
+      "repository": "https://github.com/DarkMatterCore/libnxtc.git",
+      "commit": "aa0a375fdfae77c81cbe97e0b05515b96096a859"
+    },
+    {
+      "name": "libpulsar",
+      "repository": "https://github.com/ITotalJustice/switch-libpulsar.git",
+      "commit": "ac7bc973c92ef7c64bf4b9ee496e928e68b05939"
+    },
+    {
+      "name": "minini",
+      "repository": "https://github.com/ITotalJustice/minIni-nx.git",
+      "commit": "6e952b67459cf84637ae72facb269b9893d160ca"
+    },
+    {
+      "name": "nanovg",
+      "repository": "https://github.com/ITotalJustice/nanovg-deko3d.git",
+      "commit": "2acb0f31c06f9c8748085e02fe2d07be8c9d66cd"
+    },
+    {
+      "name": "stb",
+      "repository": "https://github.com/nothings/stb.git",
+      "commit": "5c205738c191bcb0abc65c4febfa9bd25ff35234"
+    },
+    {
+      "name": "stb_nanovg",
+      "repository": "https://github.com/nothings/stb.git",
+      "commit": "31c1ad37456438565541f4919958214b6e762fb4"
+    },
+    {
+      "name": "yyjson",
+      "repository": "https://github.com/ibireme/yyjson.git",
+      "commit": "8b4a38dc994a110abaec8a400615567bd996105f"
+    },
+    {
+      "name": "zstd",
+      "repository": "https://github.com/facebook/zstd.git",
+      "commit": "f8745da6ff1ad1e7bab384bd1f9d742439278e99"
+    }
+  ]
+}

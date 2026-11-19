@@ -1,0 +1,11 @@
+{
+  "Optional second URL for the same server, for example its remote address.": "URL alternativa del mismo servidor, por ejemplo su dirección externa.",
+  "Could not load the shop index (HTTP error or metadata size limit)": "No se pudo leer el catálogo: error HTTP o tamaño de metadatos excesivo.",
+  "This package is no longer in the index": "Este paquete ya no aparece en el catálogo.",
+  "Could not connect to the Ownfoil API": "No se pudo conectar con la API de Ownfoil.",
+  "The server did not return a plain JSON shop index": "El servidor no devolvió un índice JSON de tienda compatible.",
+  "The JSON index has no files array (encrypted indices are not supported)": "El índice JSON no contiene una lista files; los índices cifrados no son compatibles.",
+  "The server rejected the login or this account has no shop access": "El servidor rechazó el acceso o esta cuenta no tiene permiso para la tienda.",
+  "The server returned a web page instead of a shop directory": "El servidor devolvió una página web en lugar de una carpeta de tienda.",
+  "Ownfoil": "Ownfoil"
+}

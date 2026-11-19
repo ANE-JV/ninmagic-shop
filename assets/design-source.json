@@ -1,0 +1,9 @@
+{
+  "tool": "image_gen (integrado)",
+  "reference": "Logo NinMagic aportado por su propietario",
+  "purpose": "Icono hbmenu y logo interior de NinMagic Shop",
+  "prompt": "Conservar figura encapuchada, ojos cian, brazos cruzados, marco angular y JV del logo original. Añadir SHOP en una placa ámbar, fondo azul marino y contorno cian. Icono cuadrado nítido, sin otras marcas ni texto.",
+  "master": "assets/ninmagic-shop-master.png",
+  "runtime": "assets/romfs/theme/ninmagic-shop-logo.png",
+  "hbmenu": "assets/icon.jpg"
+}

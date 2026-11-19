@@ -1,0 +1,895 @@
+cmake_minimum_required(VERSION 3.13)
+
+# generic options.
+option(ENABLE_NVJPG "" OFF)
+option(ENABLE_NSZ "enables exporting to nsz" ON)
+
+# lib options.
+option(ENABLE_LIBUSBHSFS "enables FAT/exFAT hdd mounting" ON)
+# ntfs is provided by ntfs-3g (GPLv2+, compatible with sphaira's GPLv3).
+# needs the portlib: (dkp-)pacman -S switch-ntfs-3g
+option(ENABLE_NTFS "enables NTFS hdd mounting, requires switch-ntfs-3g" ON)
+# ext is provided by lwext4 (GPLv2). off by default, it adds a lot to the final
+# binary size and next to no usb hdd is formatted with it.
+# needs the portlib: (dkp-)pacman -S switch-lwext4
+option(ENABLE_EXT4 "enables EXT2/3/4 hdd mounting, requires switch-lwext4" OFF)
+option(ENABLE_LIBUSBDVD "enables cd/dvd/iso/cue mounting" ON)
+option(ENABLE_FTPSRV "enables MTP server support" ON)
+option(ENABLE_LIBHAZE "enables MTP server support" ON)
+option(ENABLE_OWNFOIL "enables the Ownfoil browser and installer" ON)
+
+# audio options.
+option(ENABLE_AUDIO_MP3 "" ON)
+option(ENABLE_AUDIO_OGG "" ON)
+option(ENABLE_AUDIO_WAV "" ON)
+option(ENABLE_AUDIO_FLAC "" ON)
+
+# devoptab options.
+option(ENABLE_DEVOPTAB_HTTP "" ON)
+option(ENABLE_DEVOPTAB_NFS "" ON)
+option(ENABLE_DEVOPTAB_SMB2 "" ON)
+option(ENABLE_DEVOPTAB_FTP "" ON)
+option(ENABLE_DEVOPTAB_WEBDAV "" ON)
+# disable by default because we are CPU bound for upload/download.
+# max speed is 8MiB/s, which is fine for wifi, but awful for ethernet.
+# other clients get 36-40MiB/s.
+# it also adds 230k to binary size, and i don't think anyone will use it.
+option(ENABLE_DEVOPTAB_SFTP "" OFF)
+
+# not available on Switch 2: usb hdd/dvd need usb:hs, which kaiHEN never
+# answers (every later program then hangs until a reboot), nvjpg is written for
+# the Switch 1 gpu, nsz is only used by the game and game card exports and
+# ownfoil installs titles (see include/platform.hpp).
+if (SWITCH2)
+    foreach (feature IN ITEMS ENABLE_LIBUSBHSFS ENABLE_NTFS ENABLE_EXT4 ENABLE_LIBUSBDVD ENABLE_NVJPG ENABLE_NSZ
+                              ENABLE_OWNFOIL)
+        set(${feature} OFF CACHE BOOL "not available on Switch 2" FORCE)
+    endforeach()
+endif()
+
+set(sphaira_VERSION 0.1.0)
+
+project(sphaira
+    VERSION ${sphaira_VERSION}
+    LANGUAGES C CXX
+)
+
+find_package(Git REQUIRED)
+
+execute_process(
+    COMMAND "${GIT_EXECUTABLE}" rev-parse --short HEAD
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE GIT_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+execute_process(
+    COMMAND "${GIT_EXECUTABLE}" symbolic-ref --short HEAD
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE GIT_BRANCH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+execute_process(
+    COMMAND "${GIT_EXECUTABLE}" status --porcelain
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    OUTPUT_VARIABLE GIT_DIRTY
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+
+if (NINMAGIC_SOURCE_COMMIT)
+    string(SUBSTRING "${NINMAGIC_SOURCE_COMMIT}" 0 7 GIT_COMMIT)
+    set(GIT_BRANCH "${NINMAGIC_SOURCE_BRANCH}")
+endif()
+
+if (DEFINED sphaira_VERSION_OVERRIDE)
+    set(sphaira_DISPLAY_VERSION "${sphaira_VERSION_OVERRIDE} [${GIT_COMMIT}]")
+else()
+    set(sphaira_DISPLAY_VERSION "${sphaira_VERSION} [${GIT_COMMIT}]")
+endif()
+
+add_executable(sphaira
+    source/ui/menus/album_menu.cpp
+    source/ui/menus/album_share_menu.cpp
+    source/ui/menus/appstore.cpp
+    source/ui/menus/file_viewer.cpp
+    source/ui/menus/image_viewer.cpp
+    source/ui/menus/filebrowser.cpp
+    source/ui/menus/file_picker.cpp
+    source/ui/menus/homebrew.cpp
+    source/ui/menus/irs_menu.cpp
+    source/ui/menus/main_menu.cpp
+    source/ui/menus/menu_base.cpp
+    source/ui/menus/save_menu.cpp
+    source/ui/menus/storage_menu.cpp
+    source/ui/menus/themezer.cpp
+    source/ui/menus/ghdl.cpp
+    source/ui/menus/usb_menu.cpp
+    source/ui/menus/gc_menu.cpp
+    source/ui/menus/game_menu.cpp
+    source/ui/menus/game_meta_menu.cpp
+    source/ui/menus/game_nca_menu.cpp
+    source/ui/menus/grid_menu_base.cpp
+    source/ui/menus/install_stream_menu_base.cpp
+
+    source/ui/error_box.cpp
+    source/ui/notification.cpp
+    source/ui/nvg_util.cpp
+    source/ui/option_box.cpp
+    source/ui/popup_list.cpp
+    source/ui/popup_multi_select.cpp
+    source/ui/progress_box.cpp
+    source/ui/scrollable_text.cpp
+    source/ui/sidebar.cpp
+    source/ui/widget.cpp
+    source/ui/list.cpp
+    source/ui/scrolling_text.cpp
+    source/ui/music_player.cpp
+    source/ui/forwarder_editor.cpp
+    source/ui/steamgriddb_icon.cpp
+
+    source/app.cpp
+    source/ninmagic_tls.cpp
+    source/shop_update.cpp
+    source/shop_update_network.cpp
+    source/download.cpp
+    source/dumper.cpp
+    source/game_lang.cpp
+    source/option.cpp
+    source/evman.cpp
+    source/fs.cpp
+    source/image.cpp
+    source/location.cpp
+    source/log.cpp
+    source/main.cpp
+    source/album_caps.cpp
+    source/album_server.cpp
+    source/nro.cpp
+    source/nxlink.cpp
+    source/qrcode.cpp
+    source/swkbd.cpp
+    source/web.cpp
+    source/hasher.cpp
+    source/i18n.cpp
+    source/threaded_file_transfer.cpp
+    source/title_info.cpp
+    source/minizip_helper.cpp
+    source/msp.cpp
+    source/nx_versions.cpp
+
+    source/utils/utils.cpp
+    source/utils/audio.cpp
+    source/utils/devoptab_common.cpp
+    source/utils/devoptab_romfs.cpp
+    source/utils/devoptab_save.cpp
+    source/utils/devoptab_nro.cpp
+    source/utils/devoptab_nca.cpp
+    source/utils/devoptab_nsp.cpp
+    source/utils/devoptab_xci.cpp
+    source/utils/devoptab_zip.cpp
+    source/utils/devoptab_bfsar.cpp
+    source/utils/devoptab_vfs.cpp
+    source/utils/devoptab_fatfs.cpp
+    source/utils/devoptab_game.cpp
+    source/utils/devoptab_mounts.cpp
+    source/utils/devoptab.cpp
+
+    source/usb/base.cpp
+    source/usb/usbds.cpp
+    source/usb/usbhs.cpp
+    source/usb/usb_uploader.cpp
+    source/usb/usb_installer.cpp
+    source/usb/usb_dumper.cpp
+
+    source/yati/yati.cpp
+    source/yati/container/nsp.cpp
+    source/yati/container/xci.cpp
+    source/yati/source/file.cpp
+    source/yati/source/http.cpp
+    source/yati/source/stream.cpp
+    source/yati/source/stream_file.cpp
+
+    source/yati/nx/es.cpp
+    source/yati/nx/keys.cpp
+    source/yati/nx/nca.cpp
+    source/yati/nx/ncz.cpp
+    source/yati/nx/ncm.cpp
+    source/yati/nx/ns.cpp
+
+    source/yati/nx/nxdumptool_rsa.c
+    source/yati/nx/nxdumptool/save.c
+)
+
+target_compile_definitions(sphaira PRIVATE
+    -DAPP_VERSION="${sphaira_VERSION}"
+    -DAPP_DISPLAY_VERSION="${sphaira_DISPLAY_VERSION}"
+    -DCURL_NO_OLDIES=1
+    -DDEV_BUILD=$<BOOL:${DEV_BUILD}>
+    -DZSTD_STATIC_LINKING_ONLY=1
+)
+
+# owo installs forwarders, which embed hbl. Switch 2 has neither.
+if (SWITCH2)
+    target_sources(sphaira PRIVATE source/owo_unsupported.cpp)
+else()
+    target_sources(sphaira PRIVATE source/owo.cpp)
+endif()
+
+target_compile_options(sphaira PRIVATE
+    -Wall
+    -Wextra
+
+    # unsure if it's a good idea to enable these by default as
+    # it may cause breakage upon compiler updates.
+    # -Werror
+    # -Wfatal-errors
+
+    # disabled as nx uses s64 for size and offset, however stl uses size_t instead, thus
+    # there being a lot of warnings.
+    -Wno-sign-compare
+    # disabled as many overriden methods don't use the params.
+    -Wno-unused-parameter
+    # pedantic warning, missing fields are set to 0.
+    -Wno-missing-field-initializers
+    # disabled as it warns for strcat 2 paths together, but it will never
+    # overflow due to fs enforcing a max path len anyway.
+    -Wno-format-truncation
+    # many false positives when LTO is not enabled.
+    -Wno-suggest-final-types
+
+    # the below are taken from my gba emulator, they've served me well ;)
+    -Wformat-overflow=2
+    -Wundef
+    -Wmissing-include-dirs
+    -fstrict-aliasing
+    -Wstrict-overflow=2
+    -Walloca
+    -Wduplicated-cond
+    -Wwrite-strings
+    -Wdate-time
+    -Wlogical-op
+    -Wpacked
+    -Wcast-qual
+    -Wcast-align
+    -Wimplicit-fallthrough=5
+    -Wuninitialized
+)
+
+include(FetchContent)
+set(FETCHCONTENT_QUIET FALSE)
+
+FetchContent_Declare(libpulsar
+    GIT_REPOSITORY https://github.com/ITotalJustice/switch-libpulsar.git
+    GIT_TAG ac7bc973c92ef7c64bf4b9ee496e928e68b05939
+)
+
+FetchContent_Declare(stb_nanovg
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG 31c1ad37456438565541f4919958214b6e762fb4
+)
+
+FetchContent_Declare(nanovg
+    GIT_REPOSITORY https://github.com/ITotalJustice/nanovg-deko3d.git
+    GIT_TAG 2acb0f31c06f9c8748085e02fe2d07be8c9d66cd
+)
+
+FetchContent_Declare(stb
+    GIT_REPOSITORY https://github.com/nothings/stb.git
+    GIT_TAG 5c205738c191bcb0abc65c4febfa9bd25ff35234
+)
+
+FetchContent_Declare(yyjson
+    GIT_REPOSITORY https://github.com/ibireme/yyjson.git
+    GIT_TAG 8b4a38dc994a110abaec8a400615567bd996105f
+)
+
+FetchContent_Declare(minIni
+    GIT_REPOSITORY https://github.com/ITotalJustice/minIni-nx.git
+    GIT_TAG 6e952b67459cf84637ae72facb269b9893d160ca
+)
+
+FetchContent_Declare(zstd
+    GIT_REPOSITORY https://github.com/facebook/zstd.git
+    GIT_TAG f8745da6ff1ad1e7bab384bd1f9d742439278e99
+    SOURCE_SUBDIR build/cmake
+)
+
+FetchContent_Declare(libnxtc
+    GIT_REPOSITORY https://github.com/DarkMatterCore/libnxtc.git
+    GIT_TAG aa0a375fdfae77c81cbe97e0b05515b96096a859
+)
+
+FetchContent_Declare(nvjpg
+    GIT_REPOSITORY https://github.com/ITotalJustice/oss-nvjpg.git
+    GIT_TAG 45680e7
+)
+
+FetchContent_Declare(dr_libs
+    GIT_REPOSITORY https://github.com/mackron/dr_libs.git
+    GIT_TAG b962384395249f54168d5f5f175c47bd7b39dc1d
+    GIT_SUBMODULES ""
+    SOURCE_SUBDIR NONE
+)
+
+if (ENABLE_NVJPG)
+    FetchContent_Declare(nvjpg
+        GIT_REPOSITORY https://github.com/ITotalJustice/oss-nvjpg.git
+        GIT_TAG 45680e7
+    )
+
+    FetchContent_MakeAvailable(nvjpg)
+
+    add_library(nvjpg
+        ${nvjpg_SOURCE_DIR}/lib/decoder.cpp
+        ${nvjpg_SOURCE_DIR}/lib/image.cpp
+        ${nvjpg_SOURCE_DIR}/lib/surface.cpp
+    )
+
+    target_include_directories(nvjpg PUBLIC ${nvjpg_SOURCE_DIR}/include)
+    set_target_properties(nvjpg PROPERTIES CXX_STANDARD 26)
+
+    target_link_libraries(nvjpg PRIVATE nvjpg)
+    target_compile_definitions(sphaira PRIVATE ENABLE_NVJPG)
+endif()
+
+if (ENABLE_NSZ)
+    target_sources(sphaira PRIVATE source/utils/nsz_dumper.cpp)
+    target_compile_definitions(sphaira PRIVATE ENABLE_NSZ)
+endif()
+
+if (ENABLE_LIBUSBHSFS)
+    # USBHSFS_GPL turns on both ntfs *and* ext4, they can also be enabled
+    # individually, which is what we do here as ext4 is what costs the most
+    # binary size.
+    set(USBHSFS_GPL OFF)
+    set(USBHSFS_NTFS ${ENABLE_NTFS})
+    set(USBHSFS_EXT4 ${ENABLE_EXT4})
+    set(USBHSFS_SXOS_DISABLE ON)
+
+    if (ENABLE_NTFS)
+        find_library(ntfs_3g_lib ntfs-3g)
+        if (NOT ntfs_3g_lib)
+            message(FATAL_ERROR "NTFS support is enabled but ntfs-3g is not installed, run '(dkp-)pacman -S switch-ntfs-3g' or configure with -DENABLE_NTFS=OFF")
+        endif()
+    endif()
+
+    if (ENABLE_EXT4)
+        find_library(lwext4_lib lwext4)
+        if (NOT lwext4_lib)
+            message(FATAL_ERROR "EXT4 support is enabled but lwext4 is not installed, run '(dkp-)pacman -S switch-lwext4' or configure with -DENABLE_EXT4=OFF")
+        endif()
+    endif()
+
+    FetchContent_Declare(libusbhsfs
+        GIT_REPOSITORY https://github.com/ITotalJustice/libusbhsfs.git
+        GIT_TAG 625269b
+    )
+
+    FetchContent_MakeAvailable(libusbhsfs)
+
+    target_compile_definitions(sphaira PRIVATE ENABLE_LIBUSBHSFS)
+    target_link_libraries(sphaira PRIVATE libusbhsfs)
+
+    if (ENABLE_NTFS)
+        target_compile_definitions(sphaira PRIVATE ENABLE_NTFS)
+    endif()
+
+    if (ENABLE_EXT4)
+        target_compile_definitions(sphaira PRIVATE ENABLE_EXT4)
+    endif()
+else()
+    target_sources(sphaira PRIVATE source/ff16/ffunicode.c)
+endif()
+
+find_path(mbedtls_inc mbedtls REQUIRED)
+
+if (ENABLE_LIBUSBDVD)
+    FetchContent_Declare(libusbdvd
+        GIT_REPOSITORY https://github.com/proconsule/libusbdvd.git
+        GIT_TAG c7598a9
+    )
+
+    FetchContent_MakeAvailable(libusbdvd)
+
+    add_library(libusbdvd
+        ${libusbdvd_SOURCE_DIR}/source/usbdvd.cpp
+        ${libusbdvd_SOURCE_DIR}/source/usbdvd_scsi.cpp
+        ${libusbdvd_SOURCE_DIR}/source/usbdvd_utils.cpp
+        ${libusbdvd_SOURCE_DIR}/source/CSS/usbdvd_css.cpp
+        ${libusbdvd_SOURCE_DIR}/source/CSS/usbdvd_csscache.cpp
+        ${libusbdvd_SOURCE_DIR}/source/fs/usbdvd_datadisc.cpp
+        ${libusbdvd_SOURCE_DIR}/source/fs/audiocdfs/audiocdfs.cpp
+        ${libusbdvd_SOURCE_DIR}/source/fs/audiocdfs/cdaudio_devoptab.cpp
+        ${libusbdvd_SOURCE_DIR}/source/fs/iso9660/usbdvd_iso9660.cpp
+        ${libusbdvd_SOURCE_DIR}/source/fs/iso9660/iso9660_devoptab.cpp
+        ${libusbdvd_SOURCE_DIR}/source/fs/udf/usbdvd_udf.cpp
+        ${libusbdvd_SOURCE_DIR}/source/fs/udf/udf_devoptab.cpp
+        ${libusbdvd_SOURCE_DIR}/source/os/switch/switch_usb.cpp
+
+    )
+    target_include_directories(libusbdvd PRIVATE ${libusbdvd_SOURCE_DIR}/source/)
+    target_include_directories(libusbdvd PRIVATE ${libusbdvd_SOURCE_DIR}/source/os/switch)
+    target_include_directories(libusbdvd PRIVATE ${libusbdvd_SOURCE_DIR}/source/CSS)
+    target_include_directories(libusbdvd PRIVATE ${libusbdvd_SOURCE_DIR}/source/fs)
+    target_include_directories(libusbdvd PRIVATE ${libusbdvd_SOURCE_DIR}/source/fs/audiocdfs)
+    target_include_directories(libusbdvd PRIVATE ${libusbdvd_SOURCE_DIR}/source/fs/iso9660)
+    target_include_directories(libusbdvd PRIVATE ${libusbdvd_SOURCE_DIR}/source/fs/udf)
+    target_include_directories(libusbdvd PUBLIC ${libusbdvd_SOURCE_DIR}/include)
+    target_include_directories(libusbdvd PUBLIC ${mbedtls_inc})
+
+    target_compile_definitions(sphaira PRIVATE ENABLE_LIBUSBDVD)
+    target_link_libraries(sphaira PRIVATE libusbdvd)
+    target_sources(sphaira PRIVATE source/usbdvd.cpp)
+endif()
+
+if (ENABLE_FTPSRV)
+    FetchContent_Declare(ftpsrv
+        GIT_REPOSITORY https://github.com/ITotalJustice/ftpsrv.git
+        GIT_TAG 7c82402
+        SOURCE_SUBDIR NONE
+        PATCH_COMMAND ${CMAKE_COMMAND}
+            -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
+            -DPATCH=${CMAKE_SOURCE_DIR}/cmake/patches/ftpsrv-upload-callback.patch
+            -P ${CMAKE_SOURCE_DIR}/cmake/apply_patch.cmake
+    )
+
+    FetchContent_MakeAvailable(ftpsrv)
+
+    set(FTPSRV_LIB_BUILD TRUE)
+    set(FTPSRV_LIB_VFS_CUSTOM ${ftpsrv_SOURCE_DIR}/src/platform/nx/vfs_nx.h)
+    set(FTPSRV_LIB_PATH_SIZE 0x301)
+    set(FTPSRV_LIB_SESSIONS 16)
+    set(FTPSRV_LIB_BUF_SIZE 1024*64)
+
+    set(FTPSRV_LIB_CUSTOM_DEFINES
+        USE_VFS_SAVE=$<BOOL:FALSE>
+        USE_VFS_STORAGE=$<BOOL:TRUE>
+        # disabled as it may conflict with the gamecard menu.
+        USE_VFS_GC=$<BOOL:FALSE>
+        USE_VFS_USBHSFS=$<BOOL:FALSE>
+        VFS_NX_BUFFER_IO=$<BOOL:TRUE>
+        # let sphaira handle init / closing of the hdd.
+        USE_VFS_USBHSFS_INIT=$<BOOL:FALSE>
+        # disable romfs mounting as otherwise we cannot write / modify sphaira.nro
+        USE_VFS_ROMFS=$<BOOL:FALSE>
+        FTP_SOCKET_HEADER="${ftpsrv_SOURCE_DIR}/src/platform/nx/socket_nx.h"
+    )
+
+    add_subdirectory(${ftpsrv_SOURCE_DIR} binary_dir)
+
+    add_library(ftpsrv_helper
+        ${ftpsrv_SOURCE_DIR}/src/platform/nx/vfs_nx.c
+        ${ftpsrv_SOURCE_DIR}/src/platform/nx/vfs/vfs_nx_none.c
+        ${ftpsrv_SOURCE_DIR}/src/platform/nx/vfs/vfs_nx_root.c
+        ${ftpsrv_SOURCE_DIR}/src/platform/nx/vfs/vfs_nx_fs.c
+        ${ftpsrv_SOURCE_DIR}/src/platform/nx/vfs/vfs_nx_storage.c
+        ${ftpsrv_SOURCE_DIR}/src/platform/nx/utils.c
+    )
+
+    target_link_libraries(ftpsrv_helper PUBLIC ftpsrv)
+    target_include_directories(ftpsrv_helper PUBLIC ${ftpsrv_SOURCE_DIR}/src/platform)
+
+    target_compile_definitions(sphaira PRIVATE ENABLE_FTPSRV)
+    target_link_libraries(sphaira PRIVATE ftpsrv_helper)
+
+    target_sources(sphaira PRIVATE
+        source/ftpsrv_helper.cpp
+        source/ui/menus/ftp_menu.cpp
+    )
+endif()
+
+if (ENABLE_LIBHAZE)
+    # Switch 2's usb:ds differs from what libounce's usb:ds helpers send, see
+    # the patch.
+    set(libhaze_patch)
+    if (SWITCH2)
+        set(libhaze_patch PATCH_COMMAND ${CMAKE_COMMAND}
+            -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
+            -DPATCH=${CMAKE_SOURCE_DIR}/cmake/patches/libhaze-switch2-usbds.patch
+            -P ${CMAKE_SOURCE_DIR}/cmake/apply_patch.cmake
+        )
+    endif()
+
+    FetchContent_Declare(libhaze
+        GIT_REPOSITORY https://github.com/R-YaTian/libhaze.git
+        GIT_TAG 9f5467c
+        ${libhaze_patch}
+    )
+
+    FetchContent_MakeAvailable(libhaze)
+    target_compile_definitions(sphaira PRIVATE ENABLE_LIBHAZE)
+    target_link_libraries(sphaira PRIVATE haze)
+
+    target_sources(sphaira PRIVATE
+        source/haze_helper.cpp
+        source/ui/menus/mtp_menu.cpp
+    )
+endif()
+
+if (ENABLE_OWNFOIL)
+    target_compile_definitions(sphaira PRIVATE ENABLE_OWNFOIL)
+    target_sources(sphaira PRIVATE
+        source/ui/install_queue.cpp
+        source/ui/menus/ownfoil.cpp
+        source/ui/menus/ownfoil_title.cpp
+        source/utils/ownfoil.cpp
+        source/utils/ownfoil_discovery.cpp
+        source/utils/ownfoil_api.cpp
+        source/utils/ownfoil_installed.cpp
+    )
+endif()
+
+if (ENABLE_DEVOPTAB_HTTP)
+    target_compile_definitions(sphaira PRIVATE ENABLE_DEVOPTAB_HTTP)
+    target_sources(sphaira PRIVATE source/utils/devoptab_http.cpp)
+endif()
+
+if (ENABLE_DEVOPTAB_NFS)
+    FetchContent_Declare(libnfs
+        GIT_REPOSITORY https://github.com/ITotalJustice/libnfs.git
+        GIT_TAG 65f3e11
+    )
+
+    FetchContent_MakeAvailable(libnfs)
+    target_compile_definitions(sphaira PRIVATE ENABLE_DEVOPTAB_NFS)
+    target_link_libraries(sphaira PRIVATE nfs)
+    target_sources(sphaira PRIVATE source/utils/devoptab_nfs.cpp)
+
+    # todo: fix this upstream as nfs should export these folders.
+    target_include_directories(sphaira PRIVATE
+        ${libnfs_SOURCE_DIR}/include
+        ${libnfs_SOURCE_DIR}/include/nfsc
+        ${libnfs_SOURCE_DIR}/nfs
+    )
+endif()
+
+if (ENABLE_DEVOPTAB_SMB2)
+    FetchContent_Declare(libsmb2
+        GIT_REPOSITORY https://github.com/ITotalJustice/libsmb2.git
+        GIT_TAG 867beea
+    )
+
+    FetchContent_MakeAvailable(libsmb2)
+    target_compile_definitions(sphaira PRIVATE ENABLE_DEVOPTAB_SMB2)
+    target_link_libraries(sphaira PRIVATE smb2)
+    target_sources(sphaira PRIVATE source/utils/devoptab_smb2.cpp)
+endif()
+
+if (ENABLE_DEVOPTAB_FTP)
+    target_compile_definitions(sphaira PRIVATE ENABLE_DEVOPTAB_FTP)
+    target_sources(sphaira PRIVATE source/utils/devoptab_ftp.cpp)
+endif()
+
+if (ENABLE_DEVOPTAB_SFTP)
+    # set to build from source, otherwise it will link against the older dkp libssh2.
+    if (1)
+        set(CRYPTO_BACKEND mbedTLS)
+        set(ENABLE_ZLIB_COMPRESSION ON)
+        set(ENABLE_DEBUG_LOGGING OFF)
+        set(BUILD_EXAMPLES OFF)
+        set(BUILD_TESTING OFF)
+        set(LINT OFF)
+
+        FetchContent_Declare(libssh2
+            GIT_REPOSITORY https://github.com/libssh2/libssh2.git
+            # GIT_TAG a0dafb3 # latest commit, works fine, but i'll stick to main release.
+            GIT_TAG libssh2-1.11.1
+        )
+
+        FetchContent_MakeAvailable(libssh2)
+        target_link_libraries(sphaira PRIVATE libssh2::libssh2)
+    else()
+        include(FindPkgConfig)
+        pkg_check_modules(LIBSSH2 libssh2 REQUIRED)
+        target_include_directories(sphaira PRIVATE ${LIBSSH2_INCLUDE_DIRS})
+        target_link_libraries(sphaira PRIVATE ${LIBSSH2_LIBRARIES})
+    endif()
+
+    target_compile_definitions(sphaira PRIVATE ENABLE_DEVOPTAB_SFTP)
+    target_sources(sphaira PRIVATE source/utils/devoptab_sftp.cpp)
+endif()
+
+if (ENABLE_DEVOPTAB_WEBDAV)
+    set(PUGIXML_NO_EXCEPTIONS ON)
+    set(PUGIXML_WCHAR_MODE OFF)
+
+    FetchContent_Declare(pugixml
+        GIT_REPOSITORY https://github.com/zeux/pugixml.git
+        GIT_TAG v1.15
+    )
+
+    FetchContent_MakeAvailable(pugixml)
+    target_compile_definitions(sphaira PRIVATE ENABLE_DEVOPTAB_WEBDAV)
+    target_link_libraries(sphaira PRIVATE pugixml)
+    target_sources(sphaira PRIVATE source/utils/devoptab_webdav.cpp)
+endif()
+
+if (ENABLE_AUDIO_MP3)
+    FetchContent_Declare(id3v2lib
+        GIT_REPOSITORY https://github.com/R-YaTian/id3v2lib.git
+        GIT_TAG 43e4592
+    )
+
+    FetchContent_MakeAvailable(id3v2lib)
+    target_link_libraries(sphaira PRIVATE id3v2lib)
+    target_compile_definitions(sphaira PRIVATE ENABLE_AUDIO_MP3)
+endif()
+
+if (ENABLE_AUDIO_OGG)
+    target_compile_definitions(sphaira PRIVATE ENABLE_AUDIO_OGG)
+endif()
+
+if (ENABLE_AUDIO_WAV)
+    target_compile_definitions(sphaira PRIVATE ENABLE_AUDIO_WAV)
+endif()
+
+if (ENABLE_AUDIO_FLAC)
+    target_compile_definitions(sphaira PRIVATE ENABLE_AUDIO_FLAC)
+endif()
+
+# ztsd
+set(ZSTD_BUILD_STATIC ON)
+set(ZSTD_BUILD_SHARED OFF)
+set(ZSTD_BUILD_COMPRESSION ${ENABLE_NSZ})
+set(ZSTD_MULTITHREAD_SUPPORT ${ENABLE_NSZ})
+set(ZSTD_BUILD_DECOMPRESSION ON)
+set(ZSTD_BUILD_DICTBUILDER OFF)
+set(ZSTD_LEGACY_SUPPORT OFF)
+set(ZSTD_BUILD_PROGRAMS OFF)
+set(ZSTD_BUILD_TESTS OFF)
+
+# minini
+set(MININI_LIB_NAME minIni)
+set(MININI_USE_STDIO ON)
+set(MININI_USE_NX OFF)
+set(MININI_USE_FLOAT ON)
+
+# nanovg
+if (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    set(NANOVG_DEBUG ON)
+endif()
+set(NANOVG_NO_JPEG OFF)
+set(NANOVG_NO_PNG OFF)
+set(NANOVG_NO_BMP OFF)
+set(NANOVG_NO_PSD ON)
+set(NANOVG_NO_TGA ON)
+set(NANOVG_NO_GIF ON)
+set(NANOVG_NO_HDR ON)
+set(NANOVG_NO_PIC ON)
+set(NANOVG_NO_PNM ON)
+
+if (SWITCH2)
+    # nanovg draws with drako3d, the deko3d api for the Switch 2 gpu, installed
+    # in libounce. switch2/include maps the deko3d headers to it.
+    if (NANOVG_DEBUG)
+        find_library(drako3d_lib NAMES drako3dd)
+    else()
+        find_library(drako3d_lib NAMES drako3d)
+    endif()
+    find_path(drako3d_inc drako3d.hpp)
+    if (NOT drako3d_lib OR NOT drako3d_inc)
+        message(FATAL_ERROR "drako3d is not installed, build it from https://github.com/ouncebrew/drako3d and run 'make install'")
+    endif()
+
+    # nanovg links deko3d_lib, find_library() keeps a value that is already set.
+    set(deko3d_lib "${drako3d_lib}" CACHE FILEPATH "the deko3d library nanovg links, drako3d on Switch 2" FORCE)
+
+    # the Switch 2 shaders are compiled with uam2, without it the prebuilt ones
+    # in assets/switch2/shaders are used. after a nanovg update that changes
+    # its shaders, rebuild them with "uam2 -s vert|frag -o name.dksh name.glsl"
+    # and update glsl.sha256 (sha256sum of each glsl, without carriage returns).
+    option(SWITCH2_UAM2 "compile the Switch 2 shaders with uam2 when it is installed, OFF uses assets/switch2/shaders" ON)
+    if (SWITCH2_UAM2)
+        find_program(NX_UAM2_EXE NAMES uam2 HINTS "${DEVKITPRO}/tools/bin")
+    endif()
+    if (SWITCH2_UAM2 AND NX_UAM2_EXE)
+        message(STATUS "compiling the nanovg shaders with ${NX_UAM2_EXE}")
+    else()
+        message(STATUS "using the prebuilt Switch 2 shaders in assets/switch2/shaders")
+    endif()
+
+    # overrides devkitPro's nx_add_shader_program(), which nanovg calls.
+    function(nx_add_shader_program target source type)
+        cmake_parse_arguments(PARSE_ARGV 3 NX_UAM "" "OUTPUT" "")
+        if (DEFINED NX_UAM_OUTPUT)
+            get_filename_component(NX_UAM_OUTPUT "${NX_UAM_OUTPUT}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_BINARY_DIR}")
+        else()
+            set(NX_UAM_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${target}.dksh")
+        endif()
+        get_filename_component(source "${source}" ABSOLUTE)
+
+        if (SWITCH2_UAM2 AND NX_UAM2_EXE)
+            add_custom_command(
+                OUTPUT "${NX_UAM_OUTPUT}"
+                COMMAND "${NX_UAM2_EXE}" -o "${NX_UAM_OUTPUT}" -s ${type} "${source}"
+                DEPENDS "${source}"
+                COMMENT "Building Switch 2 shader program ${target}"
+                VERBATIM
+            )
+        else()
+            # only valid for the glsl it was built from. the hash leaves out
+            # carriage returns, git may convert line endings.
+            set(prebuilt_dir "${CMAKE_SOURCE_DIR}/assets/switch2/shaders")
+            get_filename_component(source_name "${source}" NAME)
+            file(READ "${source}" source_text)
+            string(REPLACE "\r" "" source_text "${source_text}")
+            string(SHA256 source_hash "${source_text}")
+            file(STRINGS "${prebuilt_dir}/glsl.sha256" prebuilt_hash REGEX " ${source_name}")
+            string(REGEX REPLACE "^([0-9a-f]+) .*$" "\\1" prebuilt_hash "${prebuilt_hash}")
+            if (NOT EXISTS "${prebuilt_dir}/${target}.dksh" OR NOT prebuilt_hash STREQUAL source_hash)
+                message(FATAL_ERROR "assets/switch2/shaders has no shader built from ${source}, install uam2 to compile it")
+            endif()
+            add_custom_command(
+                OUTPUT "${NX_UAM_OUTPUT}"
+                COMMAND ${CMAKE_COMMAND} -E copy "${prebuilt_dir}/${target}.dksh" "${NX_UAM_OUTPUT}"
+                DEPENDS "${prebuilt_dir}/${target}.dksh"
+                COMMENT "Using the prebuilt Switch 2 shader program ${target}"
+                VERBATIM
+            )
+        endif()
+
+        add_custom_target(${target} DEPENDS "${NX_UAM_OUTPUT}")
+        dkp_set_target_file(${target} "${NX_UAM_OUTPUT}")
+    endfunction()
+endif()
+
+# yyjson
+set(YYJSON_INSTALL OFF)
+set(YYJSON_DISABLE_READER OFF)
+set(YYJSON_DISABLE_WRITER OFF)
+set(YYJSON_DISABLE_UTILS ON)
+set(YYJSON_DISABLE_FAST_FP_CONV ON)
+set(YYJSON_DISABLE_NON_STANDARD ON)
+set(YYJSON_DISABLE_UTF8_VALIDATION ON)
+set(YYJSON_DISABLE_UNALIGNED_MEMORY_ACCESS OFF)
+
+FetchContent_MakeAvailable(
+    libpulsar
+    nanovg
+    stb
+    minIni
+    yyjson
+    zstd
+    libnxtc
+    dr_libs
+)
+
+if (SWITCH2)
+    target_include_directories(nanovg PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/switch2/include)
+endif()
+
+add_library(stb INTERFACE)
+target_include_directories(stb INTERFACE ${stb_SOURCE_DIR})
+
+add_library(dr_libs INTERFACE)
+target_include_directories(dr_libs INTERFACE ${dr_libs_SOURCE_DIR})
+
+find_package(ZLIB REQUIRED)
+find_path(zlib_inc zlib.h)
+
+add_library(libnxtc
+    ${libnxtc_SOURCE_DIR}/source/nxtc.c
+    ${libnxtc_SOURCE_DIR}/source/nxtc_log.c
+    ${libnxtc_SOURCE_DIR}/source/nxtc_utils.c
+)
+target_include_directories(libnxtc PUBLIC ${libnxtc_SOURCE_DIR}/include ${zlib_inc})
+
+find_library(minizip_lib minizip REQUIRED)
+find_path(minizip_inc minizip REQUIRED)
+
+find_package(CURL REQUIRED)
+find_library(mbedcrypto_lib mbedcrypto REQUIRED)
+
+add_library(fatfs
+    source/ff16/diskio.c
+    source/ff16/ff.c
+)
+
+target_include_directories(fatfs PUBLIC source/ff16)
+
+set_target_properties(sphaira PROPERTIES
+    C_STANDARD 23
+    C_EXTENSIONS ON
+    CXX_STANDARD 26
+    CXX_EXTENSIONS ON
+)
+
+target_link_libraries(sphaira PRIVATE
+    libpulsar
+    minIni
+    nanovg
+    stb
+    yyjson
+    libnxtc
+    fatfs
+    dr_libs
+    libzstd_static
+
+    ${minizip_lib}
+    ZLIB::ZLIB
+    CURL::libcurl
+    ${mbedcrypto_lib}
+)
+
+target_include_directories(sphaira PRIVATE
+    include
+    ${minizip_inc}
+    ${mbedtls_inc}
+    include/yati/nx/nxdumptool
+)
+
+# copy the romfs
+file(COPY ${CMAKE_SOURCE_DIR}/assets/romfs DESTINATION ${CMAKE_CURRENT_BINARY_DIR})
+
+# Switch 2 leaves out the catalogue of Switch 1 homebrew, and the GitHub entry of
+# sphaira: the GitHub menu would install the Switch 1 build of sphaira.zip, the
+# updater takes the Switch 2 one from its nx2 folder.
+set(sphaira_romfs_switch2_commands)
+if (SWITCH2)
+    foreach (removed github/switchports.json github/sphaira.json)
+        file(REMOVE ${CMAKE_CURRENT_BINARY_DIR}/romfs/${removed})
+        list(APPEND sphaira_romfs_switch2_commands
+            COMMAND ${CMAKE_COMMAND} -E rm -f ${CMAKE_CURRENT_BINARY_DIR}/romfs/${removed}
+        )
+    endforeach()
+endif()
+
+# create assets target
+dkp_add_asset_target(sphaira_romfs ${CMAKE_CURRENT_BINARY_DIR}/romfs)
+
+file(GLOB_RECURSE sphaira_romfs_source_files CONFIGURE_DEPENDS
+    LIST_DIRECTORIES false
+    ${CMAKE_SOURCE_DIR}/assets/romfs/*
+)
+add_custom_target(sphaira_romfs_sync
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/assets/romfs
+        ${CMAKE_CURRENT_BINARY_DIR}/romfs
+    ${sphaira_romfs_switch2_commands}
+    DEPENDS ${sphaira_romfs_source_files}
+)
+add_dependencies(sphaira_romfs sphaira_romfs_sync)
+set_property(TARGET sphaira_romfs APPEND PROPERTY DKP_ASSET_FILES ${sphaira_romfs_source_files})
+
+# set the embed path for assets
+target_compile_options(sphaira PRIVATE
+    --embed-dir=${CMAKE_SOURCE_DIR}/assets/embed
+)
+
+if (NOT SWITCH2)
+    # wait until hbl is built first as we need the exefs to embed
+    add_dependencies(sphaira hbl_nso hbl_npdm)
+
+    # set the embed path for hbl
+    target_compile_options(sphaira PRIVATE
+        --embed-dir=${CMAKE_BINARY_DIR}/hbl
+    )
+endif()
+
+# create nacp
+nx_generate_nacp(
+    OUTPUT sphaira.nacp
+    NAME "NinMagic Shop"
+    AUTHOR NinMagic
+    VERSION ${sphaira_VERSION}
+)
+
+# create nro
+nx_create_nro(sphaira
+    OUTPUT ${CMAKE_BINARY_DIR}/NinMagic-Shop.nro
+    ICON ${CMAKE_SOURCE_DIR}/assets/icon.jpg
+    NACP sphaira.nacp
+    ROMFS sphaira_romfs
+)
+
+file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/switch/NinMagicShop)
+
+add_custom_command(
+    TARGET sphaira_nro POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy
+        ${CMAKE_BINARY_DIR}/NinMagic-Shop.nro
+        ${CMAKE_BINARY_DIR}/switch/NinMagicShop/NinMagic-Shop.nro
+)
+
+message(STATUS "generating nro in: ${CMAKE_BINARY_DIR}/NinMagic-Shop.nro")
+message(STATUS "run nxlink -s ${CMAKE_BINARY_DIR}/NinMagic-Shop.nro")
