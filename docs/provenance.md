@@ -13,3 +13,5 @@ NinMagic Shop es un proyecto independiente de NinMagic, derivado de Sphaira.
 El icono propio se preparó a partir del logo NinMagic proporcionado por su propietario. El distintivo SHOP usa cian y ámbar para diferenciar esta aplicación. La imagen conceptual del catálogo es una propuesta visual, no una captura de una consola ni una prueba de instalación.
 
 Este repositorio no incluye juegos, archivos de partidas, claves de consola ni credenciales de servidores. Las fuentes correspondientes y las instrucciones de compilación se distribuyen junto con la aplicación.
+
+La fuente Barlow Bold se distribuye bajo SIL Open Font License 1.1. El aviso original y la procedencia con SHA-256 están en `third_party/licenses/barlow/`; la fuente está embebida en RomFS.

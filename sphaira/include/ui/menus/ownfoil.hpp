@@ -19,6 +19,7 @@
 #include <stop_token>
 
 namespace sphaira::ui::menu::ownfoil {
+struct TitleMenu;
 
 struct Menu final : grid::Menu {
     Menu(u32 flags);
@@ -30,6 +31,7 @@ struct Menu final : grid::Menu {
     void SelectCategory(sphaira::ownfoil::api::Category category, bool prompt_search = true);
     void GoUp();
     void RefreshCatalog();
+    void CyclePlatform(int direction);
     void Update(Controller* controller, TouchInfo* touch) override;
     void Draw(NVGcontext* vg, Theme* theme) override;
     void OnFocusGained() override;
@@ -117,6 +119,13 @@ private:
     void EnterDirectory(const sphaira::ownfoil::api::ShopApp& app);
     void ToggleFavorite();
     void EditSelected();
+    void EditCurrent();
+    void EditProfile(const sphaira::ownfoil::Config& config);
+    void ProfileSaved(const sphaira::ownfoil::Config& previous, const sphaira::ownfoil::Config& saved);
+    void UpdateProfileActions();
+    auto PlatformChoices() const -> std::vector<std::string>;
+    void ActivateSidebar();
+    void UpdatePreview();
     auto FindAction(Button button) const -> std::optional<Action>;
     void RestoreAction(Button button, std::optional<Action>& prev);
     void DeleteSelected();
@@ -195,6 +204,13 @@ private:
     // home view and handed back on the way out.
     std::optional<Action> m_prev_select{};
     std::optional<Action> m_prev_y{};
+    std::shared_ptr<TitleMenu> m_preview{};
+    std::string m_preview_id{};
+    u64 m_preview_changed_tick{};
+    bool m_sidebar_focus{}, m_detail_focus{};
+    size_t m_sidebar_index{};
+    size_t m_sidebar_offset{};
+    s64 m_sd_free{-1};
     // an index into CATEGORIES, deliberately not persisted unlike the options
     // beside it: a shop opens on New games every time it is connected to.
     s64 m_category{};

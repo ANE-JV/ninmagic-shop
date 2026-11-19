@@ -20,6 +20,9 @@ struct uiButton final : Object {
     std::string m_action_str;
     Vec4 m_button_pos{};
     Vec4 m_hint_pos{};
+    bool m_neon{};
+    bool m_neon_combo{};
+    float m_neon_scale{1.f};
 };
 
 struct Widget : public Object {
@@ -87,6 +90,7 @@ struct Widget : public Object {
     }
 
     auto GetUiButtons() const -> uiButtons;
+    void SetNeonButtons(bool enabled = true) { m_neon_buttons = enabled; }
     static void SetupUiButtons(uiButtons& buttons, const Vec2& button_pos = {1220, 675});
     static auto GetUiButtons(const Actions& actions, const Vec2& button_pos = {1220, 675}) -> uiButtons;
 
@@ -94,6 +98,7 @@ struct Widget : public Object {
     Vec2 m_button_pos{1220, 675};
     bool m_focus{false};
     bool m_pop{false};
+    bool m_neon_buttons{};
 };
 
 template<typename T>

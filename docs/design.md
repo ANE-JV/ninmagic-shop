@@ -29,4 +29,14 @@ Los perfiles permiten cambiar o retirar la dirección de metadatos. Si un provee
 
 ## Referencia visual
 
-La propuesta aprobada usa fondo azul marino, selección cian, distintivo SHOP ámbar, acceso a cuenta, biblioteca con carátulas, detalle del paquete y cola. La distribución concreta se adapta al renderizador y a los controles de Switch; las capturas de ejemplo no contienen el catálogo ni el espacio real del usuario.
+El diseño aprobado es la referencia de implementación, con un lienzo lógico de 1280 × 720:
+
+- Cabecera (0–88): logo, NINMAGIC SHOP, Mi cuenta, conexión, Wi-Fi y batería real.
+- Lateral (30,108; 240 × 508): consolas, descargas, ajustes y espacio libre real.
+- Centro (298–828): título, ubicación, búsqueda, carpetas y rejilla de dos columnas por dos filas, con tarjetas de 258 × 181.
+- Panel derecho (844,108; 376 × 505): banner, contenido disponible, selección base/actualización/DLC y acciones de instalación.
+- Pie (638–720): A/X cian, B rojo, Y amarillo y L/R/+ blancos.
+
+La paleta compartida en `sphaira/include/ui/shop_style.hpp` fija el azul marino #030c18, cian #00eefc, violeta #9949ff y amarillo #ffc800. Los paneles, focos y botones tienen contornos luminosos dibujados por NanoVG. La fuente Barlow Bold, bajo OFL, conserva el peso de los encabezados; las fuentes del sistema cubren otros idiomas.
+
+Las tarjetas y los checks representan el catálogo recibido y la selección real del instalador. La pantalla de cuentas conserva la misma estética y expone Editar tienda. Las imágenes conceptuales no sustituyen una prueba de ejecución en consola.

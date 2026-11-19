@@ -56,7 +56,7 @@ MainMenu::MainMenu() {
     m_centre_menu = std::make_unique<ownfoil::Menu>(MenuFlag_Tab);
     m_right_menu = std::make_unique<game::Menu>(MenuFlag_Tab);
     m_current_menu = m_centre_menu.get();
-    SetAction(Button::START, Action{"Shop", [this] { ShowShopOptions(); }});
+    SetAction(Button::START, Action{"Menú", [this] { ShowShopOptions(); }});
     AddOnLRPress();
     for (const auto& [button, action] : m_actions) m_current_menu->SetAction(button, action);
     CheckForUpdates(false);
@@ -80,7 +80,6 @@ void MainMenu::ShowShopOptions() {
         if (m_current_menu != m_right_menu.get()) OnLRPress(m_right_menu.get(), Button::R);
     }, "Abre los juegos que ya están en esta consola.");
     options->Add<SidebarEntryCallback>("Opciones de instalación", [] { App::DisplayInstallOptions(); }, "Destino y opciones del instalador.");
-    options->Add<SidebarEntryCallback>("Tema", [] { App::DisplayThemeOptions(); }, "Colores y aspecto de NinMagic Shop.");
     SidebarEntryArray::Items languages{"Automático", "English", "日本語", "Français", "Deutsch", "Italiano", "Español", "简体中文", "한국어", "Nederlands", "Português", "Русский", "繁體中文", "Svenska", "Tiếng Việt", "Українська", "Türkçe", "Magyar"};
     options->Add<SidebarEntryArray>("Idioma", languages, [](s64& index) { App::SetLanguage(index); }, static_cast<s64>(App::GetLanguage()), "Selecciona el idioma de la aplicación.");
     if (m_update_state == UpdateState::Update) options->Add<SidebarEntryCallback>("Actualizar a " + m_release.version, [this] { ShowUpdateInfo(); }, true, "Lee las novedades antes de instalar el NRO verificado.");
@@ -88,10 +87,7 @@ void MainMenu::ShowShopOptions() {
     options->Add<SidebarEntryCallback>("Acerca de NinMagic Shop", [] {
         App::Push<OptionBox>("NinMagic Shop v" APP_VERSION "\nCliente Ownfoil basado en Sphaira.\nSelecciona tu servidor y usa tu cuenta personal.\nSoftware libre, licencia GPLv3.", "Aceptar");
     });
-    options->Add<SidebarEntryCallback>("Salir", [] {
-        if (!InstallQueue::Get().IsBusy()) { App::Exit(); return; }
-        App::Push<OptionBox>("Hay instalaciones en curso. ¿Quieres salir?", "Continuar", "Salir", 0, [](auto selected) { if (selected && *selected) App::Exit(); });
-    });
+    options->Add<SidebarEntryCallback>("Salir", [this] { RequestExit(); });
     App::Push(std::move(options));
 }
 void MainMenu::CheckForUpdates(bool show_result) {
@@ -151,7 +147,19 @@ void MainMenu::StartUpdateInstall() {
         });
     });
 }
-void MainMenu::Update(Controller* controller, TouchInfo* touch) { m_current_menu->Update(controller, touch); }
+void MainMenu::RequestExit() {
+    if (!InstallQueue::Get().IsBusy()) { App::Exit(); return; }
+    App::Push<OptionBox>("Hay instalaciones en curso. ¿Quieres salir?", "Continuar", "Salir", 0,
+        [](auto selected) { if (selected && *selected) App::Exit(); });
+}
+void MainMenu::Update(Controller* controller, TouchInfo* touch) {
+    m_current_menu->Update(controller, touch);
+    if (m_current_menu->ShouldPop()) {
+        m_current_menu->SetPop(false);
+        if (m_current_menu != m_centre_menu.get()) ShowCatalog();
+        else RequestExit();
+    }
+}
 void MainMenu::Draw(NVGcontext* vg, Theme* theme) { m_current_menu->Draw(vg, theme); }
 void MainMenu::OnFocusGained() { Widget::OnFocusGained(); m_current_menu->OnFocusGained(); }
 void MainMenu::OnFocusLost() { Widget::OnFocusLost(); m_current_menu->OnFocusLost(); }
@@ -163,10 +171,13 @@ void MainMenu::OnLRPress(MenuBase* menu, Button) {
     for (const auto& [button, action] : m_actions) m_current_menu->SetAction(button, action);
 }
 void MainMenu::AddOnLRPress() {
-    SetAction(Button::L, Action{"Descargas", [] { InstallQueue::Get().ShowMenu(); }});
     const bool catalog = m_current_menu == m_centre_menu.get();
-    SetAction(Button::R, Action{catalog ? "Instalados" : "Tienda", [this] {
-        OnLRPress(m_current_menu == m_centre_menu.get() ? m_right_menu.get() : m_centre_menu.get(), Button::R);
-    }});
+    if (catalog) {
+        SetAction(Button::L, Action{[this] { static_cast<ownfoil::Menu*>(m_centre_menu.get())->CyclePlatform(-1); }});
+        SetAction(Button::R, Action{"Consola", [this] { static_cast<ownfoil::Menu*>(m_centre_menu.get())->CyclePlatform(1); }});
+    } else {
+        SetAction(Button::L, Action{"Descargas", [] { InstallQueue::Get().ShowMenu(); }});
+        SetAction(Button::R, Action{"Tienda", [this] { OnLRPress(m_centre_menu.get(), Button::R); }});
+    }
 }
 }

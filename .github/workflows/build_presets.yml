@@ -27,7 +27,9 @@ jobs:
       - name: Test HTTP ranges and catalog parsers
         run: |
           python3 tools/test-transport.py
+          python3 tools/test-curl-legacy.py
           python3 tools/test-ownfoil.py --yyjson build/Shop/_deps/yyjson-src/src
+          python3 tools/test-profiles.py --minini build/Shop/_deps/minini-src
           python3 tools/test-updater.py --yyjson build/Shop/_deps/yyjson-src/src
       - name: Verify standalone executable
         run: python3 tools/verify.py build/Shop/NinMagic-Shop.nro --output build/Shop/verification.json

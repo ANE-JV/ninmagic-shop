@@ -1,4 +1,4 @@
-# NinMagic Shop 0.1.0 — beta
+# NinMagic Shop 0.1.1 — beta
 
 Tienda para Nintendo Switch con Atmosphère. Acceso a tu servidor, catálogo con carátulas, búsqueda, favoritos y cola de instalación. Proyecto separado de las demás aplicaciones NinMagic.
 
@@ -6,7 +6,7 @@ Deriva de [Sphaira 1.1.1](https://github.com/NaGaa95/sphaira), cuyo cliente Ownf
 
 ## Instalación
 
-Descarga [NinMagic-Shop-0.1.0.zip](https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/main/releases/0.1.0/NinMagic-Shop-0.1.0.zip) y extráelo en la raíz de la microSD. La aplicación queda en:
+Descarga [NinMagic-Shop-0.1.1.zip](https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/main/releases/0.1.1/NinMagic-Shop-0.1.1.zip) y extráelo en la raíz de la microSD. La aplicación queda en:
 
 ```
 sdmc:/switch/NinMagicShop/NinMagic-Shop.nro
@@ -23,6 +23,8 @@ Abre hbmenu **en modo aplicación**, manteniendo R al abrir un juego, y entra en
 3. Introduce tu usuario y contraseña del servidor y guarda.
 4. Conecta el perfil para consultar el catálogo.
 
+Para corregir una tienda guardada, selecciónala y pulsa **Y — Editar tienda**. También puedes tocar **Mi cuenta** y abrir **Editar tienda actual** desde sus opciones. Los cambios se guardan en el mismo perfil; dejar la contraseña sin editar conserva la existente.
+
 El host es editable. Se admiten varios perfiles, incluidos perfiles con distintas cuentas del mismo servidor. Las cuentas se administran en tu web/Ownfoil existente; la aplicación no crea usuarios nuevos.
 
 La URL debe corresponder a un servidor compatible: API nativa de Ownfoil, índice JSON abierto o listado de directorios Ownfoil antiguo. Una página web cualquiera o un índice cifrado exclusivo de otro cliente no constituye una API compatible.
@@ -36,13 +38,14 @@ Se verifica el certificado y el nombre del servidor HTTPS. No se convierte autom
 | A | Abrir una carpeta o la ficha del juego seleccionado. |
 | B | Volver; en listados por carpetas, subir a la carpeta anterior. |
 | X | Buscar juegos por nombre o una parte del nombre. |
-| Y | Categorías, consolas y carpetas disponibles. |
+| Y | Abrir la cola; en la pantalla de cuentas, editar la tienda seleccionada. |
 | − | Opciones del catálogo y del perfil. |
 | + | Menú Shop: cuenta, cola, instalados, ajustes, actualizar y salir. |
-| L | Cola de instalaciones. |
-| R | Juegos instalados / volver a la tienda. |
+| L / R | Cambiar de consola en la biblioteca. |
 
-Las indicaciones de la parte inferior muestran las acciones disponibles en cada pantalla. Las fichas permiten consultar el contenido disponible y preparar la instalación.
+La biblioteca sigue el diseño de tres columnas: consolas, descargas y ajustes a la izquierda; buscador, carpetas y cuatro carátulas en el centro; contenido del juego seleccionado y botones de instalación a la derecha. Los botones A/X son cian, B rojo, Y amarillo y L/R/+ blancos.
+
+La cruceta y el stick izquierdo recorren los juegos. Desde el borde izquierdo se accede a las consolas y desde el derecho al contenido del paquete. Los controles visibles también responden al tacto. Las indicaciones de la parte inferior muestran las acciones disponibles en cada pantalla. Las fichas permiten consultar el contenido disponible y preparar la instalación.
 
 La plataforma se obtiene de los metadatos o de la organización por carpetas del servidor. Los juegos retro que ya están empaquetados en **NSP** se pueden presentar como instalables, conservando su consola de origen cuando el catálogo aporta ese dato. Un paquete sin identificador conocido se mantiene separado de los demás; no se agrupan juegos distintos por compartir un identificador vacío.
 
@@ -52,7 +55,7 @@ Las carátulas proceden de las direcciones que ofrece el catálogo o la web del 
 
 ## Instalar un juego, actualización y DLC
 
-Abre la ficha de un juego y revisa la selección. Cuando el servidor aporta sus identificadores y versiones, se propone la actualización más reciente disponible y los DLC que falten. Puedes cambiar la selección antes de añadirla a la cola.
+Selecciona un juego y revisa la selección del panel derecho. «Instalar paquete» abre la revisión de instalación y «Añadir a la cola» encola la selección marcada. A abre la ficha completa. Cuando el servidor aporta sus identificadores y versiones, se propone la actualización más reciente disponible y los DLC que falten. Puedes cambiar la selección antes de añadirla a la cola.
 
 El instalador procesa el paquete base, la actualización seleccionada y los DLC disponibles de ese mismo juego. Los archivos que contienen varios componentes se deduplican para no pedir la misma descarga varias veces. Los paquetes sin metadatos suficientes se muestran como archivos independientes: no se inventan relaciones entre ellos.
 
@@ -82,6 +85,13 @@ La descarga se fija a un commit de este repositorio y comprueba tamaño, SHA-256
 - `config/NinMagicShop/`: perfiles, preferencias y estado del actualizador.
 
 Los perfiles guardados contienen las credenciales en la microSD. No compartas esa carpeta como parte de un pack público. Los ZIP publicados contienen la aplicación y sus licencias, sin perfiles personales ni juegos.
+
+## Cambios de 0.1.1
+
+- Biblioteca con la distribución, paleta neón y botones de colores del diseño aprobado.
+- Edición visible de tiendas existentes, sin duplicar perfiles ni borrar la contraseña conservada.
+- Corrección de la conexión con Ownfoil antiguo: sus peticiones usan un handle HTTP limpio para evitar las cabeceras TE/Connection persistentes que provocaban recibir la página de acceso web.
+- Regresión con peticiones modernas y antiguas intercaladas; se mantiene la verificación HTTPS.
 
 ## Compilar y comprobar
 

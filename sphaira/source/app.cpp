@@ -2148,6 +2148,14 @@ App::App(const char* argv0) {
                 log_write("failed plGetSharedFontByType(%d)\n", type);
             }
         }
+        // A small OFL font gives the shop's headings and coloured controls
+        // the weight of its approved design. Keep system fallback for all
+        // languages and Nintendo controller symbols.
+        if (R_SUCCEEDED(romfsInit())) {
+            ON_SCOPE_EXIT(romfsExit());
+            const auto shop_bold = nvgCreateFont(this->vg, "ShopBold", "romfs:/fonts/Barlow-Bold.ttf");
+            if (shop_bold >= 0) nvgAddFallbackFontId(this->vg, shop_bold, standard_font);
+        }
     }
 
     {

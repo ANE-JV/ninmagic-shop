@@ -5,6 +5,9 @@
 #include "ui/option_box.hpp"
 #include "ui/progress_box.hpp"
 #include "ui/install_queue.hpp"
+#include "ui/shop_style.hpp"
+#include "ui/shop_catalog_panel.hpp"
+#include "utils/utils.hpp"
 
 #include "app.hpp"
 #include "image.hpp"
@@ -29,21 +32,18 @@ std::atomic<u32> g_installs{};
 
 // the list stops short of the menu body to leave room for the discover button,
 // which is why it pages 4 rows rather than filling the area.
-constexpr Vec4 LIST_POS{30.f, 87.f, 1190.f, 425.f};
-constexpr Vec4 LIST_ITEM{75.f, 110.f, 1130.f, 90.f};
+constexpr Vec4 LIST_POS{296.f, 182.f, 906.f, 344.f};
+constexpr Vec4 LIST_ITEM{314.f, 192.f, 870.f, 73.f};
 constexpr Vec2 LIST_PAD{0.f, 12.f};
-constexpr Vec4 DISCOVER_BUTTON{75.f, 530.f, 1130.f, 60.f};
-
-// the banner view has no equivalent in grid::Menu, so it lays itself out, in
-// the shape themezer uses for its pack cards.
-constexpr Vec4 BANNER_ITEM{75.f, 110.f, 350.f, 250.f};
-constexpr Vec2 BANNER_PAD{10.f, 10.f};
-constexpr float BANNER_W = 320.f;
-constexpr float BANNER_H = 180.f;
-
-// every page is a round trip and a screenful of artwork, so the choices stay
-// modest at the low end.
-constexpr s64 PAGE_SIZES[] = {12, 24, 48, 96};
+constexpr Vec4 DISCOVER_BUTTON{314.f, 548.f, 870.f, 48.f};
+constexpr Vec4 GRID_POS{294.f, 226.f, 540.f, 386.f};
+constexpr Vec4 GRID_ITEM{298.f, 230.f, 258.f, 181.f};
+constexpr Vec2 GRID_PAD{14.f, 11.f};
+constexpr Vec4 SIDEBAR{30.f, 108.f, 240.f, 508.f};
+constexpr Vec4 SEARCH_BOX{298.f, 178.f, 370.f, 38.f};
+constexpr Vec4 FOLDERS_BUTTON{682.f, 178.f, 146.f, 38.f};
+constexpr Vec4 DETAIL_PANEL{844.f, 108.f, 376.f, 505.f};
+constexpr s64 PAGE_SIZES[]{12,24,48,96};
 
 // the title row draws the term back, so the cap keeps the header from scrolling.
 constexpr s64 SEARCH_MAX = 64;
@@ -83,18 +83,6 @@ constexpr CategoryMode CATEGORIES[] = {
     {sphaira::ownfoil::api::Category::Search, "Search"},
 };
 
-// looked up once: the '-' action is re-asserted every frame the catalog is up.
-auto GetViewActionHint() -> const std::string& {
-    static const std::string hint = "Opciones";
-    return hint;
-}
-
-// and Y, for the same reason.
-auto GetCategoryActionHint() -> const std::string& {
-    static const std::string hint = "Consolas / filtros";
-    return hint;
-}
-
 } // namespace
 
 Menu::LazyImage::LazyImage(LazyImage&& rhs) noexcept {
@@ -116,6 +104,8 @@ Menu::LazyImage::~LazyImage() {
 }
 
 Menu::Menu(u32 flags) : grid::Menu{"NinMagic Shop", flags} {
+    SetShopLayout();
+    SetShopAccountAction([this] { if (m_mode == Mode::Home) ShowServerProfiles(); else ShowOptions(); });
     // B leaves the menu from the catalog too: the server list is reached from
     // the catalog's options, not by backing out.
     SetAction(Button::B, Action{"Back"_i18n, [this]{
@@ -123,8 +113,11 @@ Menu::Menu(u32 flags) : grid::Menu{"NinMagic Shop", flags} {
         if (m_connecting) {
             m_connect_stop.request_stop();
             m_connecting = false;
+            SetShopConnection(false, false);
             return;
         }
+        if (m_mode == Mode::Home && m_detail_focus) { m_detail_focus = false; return; }
+        if (m_mode == Mode::Home && m_sidebar_focus) { m_sidebar_focus = false; return; }
         if (m_mode == Mode::Home && !m_directory_stack.empty()) {
             GoUp();
             return;
@@ -133,11 +126,18 @@ Menu::Menu(u32 flags) : grid::Menu{"NinMagic Shop", flags} {
             ShowServerProfiles();
             return;
         }
+        if (!m_base_url.empty() && !m_config.uid.empty()) {
+            SetMode(Mode::Home);
+            LoadPage(m_page);
+            return;
+        }
         SetPop();
     }});
 
     SetAction(Button::A, Action{"Select"_i18n, [this]{
         if (m_mode == Mode::Home) {
+            if (m_sidebar_focus) { ActivateSidebar(); return; }
+            if (m_detail_focus && m_preview) { Controller press{}; press.Set(Button::A, true); m_detail_focus = m_preview->HandleDetailController(&press); return; }
             OpenSelected();
             return;
         }
@@ -160,7 +160,7 @@ Menu::Menu(u32 flags) : grid::Menu{"NinMagic Shop", flags} {
         if (m_mode == Mode::Home) {
             SelectCategory(sphaira::ownfoil::api::Category::Search);
         } else {
-            ShowOptions();
+            AddServer();
         }
     }});
 
@@ -177,6 +177,9 @@ Menu::Menu(u32 flags) : grid::Menu{"NinMagic Shop", flags} {
     }
 
     SetMode(Mode::ServerList);
+    if (std::find(std::begin(PAGE_SIZES), std::end(PAGE_SIZES), m_page_size.Get()) == std::end(PAGE_SIZES)) m_page_size.Set(24);
+    m_view.Set(ViewType_Icon);
+    fs::FsNativeSd().GetFreeSpace("/", &m_sd_free);
 }
 
 Menu::~Menu() {
@@ -192,8 +195,16 @@ Menu::~Menu() {
 void Menu::SetMode(Mode mode) {
     const auto was_home = m_mode == Mode::Home;
     m_mode = mode;
+    SetShopConnection(mode == Mode::Home, m_connecting);
+    SetAction(Button::X, Action{mode == Mode::Home ? "Buscar" : "Añadir tienda", [this] {
+        if (m_mode == Mode::Home) SelectCategory(sphaira::ownfoil::api::Category::Search); else AddServer();
+    }});
+    auto primary = m_actions.at(Button::A);
+    primary.m_hint = mode == Mode::Home ? "Ver juego" : "Conectar";
+    SetAction(Button::A, primary);
 
     if (mode == Mode::Home) {
+        if (!was_home) { m_sidebar_focus = false; m_detail_focus = false; m_sidebar_index = 0; m_sidebar_offset = 0; }
         // browsing a shop, the header names it rather than the menu.
         SetTitle(m_config.name);
 
@@ -203,10 +214,8 @@ void Menu::SetMode(Mode mode) {
             m_prev_select = FindAction(Button::SELECT);
             m_prev_y = FindAction(Button::Y);
         }
-        SetAction(Button::Y, Action{GetCategoryActionHint(), [this]{
-            ShowCategories();
-        }});
-        SetAction(Button::SELECT, Action{GetViewActionHint(), [this]{
+        SetAction(Button::Y, Action{"Cola", [] { InstallQueue::Get().ShowMenu(); }});
+        SetAction(Button::SELECT, Action{[this]{
             ShowOptions();
         }});
         // no hint on ZL: the bar draws it beside ZR, in front of the one hint.
@@ -215,7 +224,7 @@ void Menu::SetMode(Mode mode) {
                 LoadPage(m_page - 1);
             }
         }});
-        SetAction(Button::R2, Action{"Page"_i18n, [this]{
+        SetAction(Button::R2, Action{[this]{
             if (m_page + 1 < GetPageMax()) {
                 LoadPage(m_page + 1);
             }
@@ -234,6 +243,9 @@ void Menu::SetMode(Mode mode) {
             SetSubHeading("");
             m_list = std::make_unique<List>(1, 4, LIST_POS, LIST_ITEM, LIST_PAD);
         }
+        SetTitleSubHeading("Selecciona una tienda y pulsa Y para editarla");
+        SetAction(Button::SELECT, Action{"Opciones", [this] { ShowOptions(); }});
+        UpdateProfileActions();
     }
 }
 
@@ -263,6 +275,10 @@ void Menu::FreeEntries() {
     m_loading = false;
     m_entries.clear();
     m_entry_index = 0;
+    m_preview.reset();
+    m_preview_id.clear();
+    m_preview_changed_tick = armGetSystemTick();
+    m_detail_focus = false;
 }
 
 void Menu::CycleView() {
@@ -270,77 +286,108 @@ void Menu::CycleView() {
     OnViewChange();
 }
 
+auto Menu::PlatformChoices() const -> std::vector<std::string> {
+    const std::vector<std::string> preferred{"Nintendo Switch", "Super Nintendo", "Nintendo 64", "Game Boy Advance", "PlayStation", "Mega Drive"};
+    const auto available = sphaira::ownfoil::api::CachedPlatforms(m_base_url, m_config);
+    if (available.empty()) return m_config.json_index ? preferred : std::vector<std::string>{"Nintendo Switch"};
+    std::vector<std::string> choices;
+    for (const auto& label : preferred) if (std::find(available.begin(), available.end(), label) != available.end()) choices.push_back(label);
+    for (const auto& label : available) if (std::find(choices.begin(), choices.end(), label) == choices.end()) choices.push_back(label);
+    return choices;
+}
+void Menu::CyclePlatform(int direction) {
+    if (m_mode != Mode::Home || m_connecting) return;
+    const auto choices = PlatformChoices();
+    if (choices.empty()) return;
+    const auto current = std::find(choices.begin(), choices.end(), m_platform);
+    const auto count = static_cast<s64>(choices.size());
+    const auto index = current == choices.end() ? (direction > 0 ? -1 : 0) : static_cast<s64>(current - choices.begin());
+    m_sidebar_index = static_cast<size_t>((index + (direction > 0 ? 1 : -1) + count) % count);
+    m_platform = choices[m_sidebar_index];
+    FreeEntries(); m_pending_page.reset(); LoadPage(0);
+}
+void Menu::ActivateSidebar() {
+    const auto choices = PlatformChoices();
+    if (m_sidebar_index < choices.size()) {
+        m_platform = choices[m_sidebar_index];
+        FreeEntries(); m_pending_page.reset(); LoadPage(0);
+    } else if (m_sidebar_index == choices.size()) InstallQueue::Get().ShowMenu();
+    else ShowOptions();
+}
+void Menu::UpdatePreview() {
+    if (m_mode != Mode::Home || m_entry_index < 0 || m_entry_index >= static_cast<s64>(m_entries.size())) return;
+    const auto& selected = m_entries[m_entry_index].app;
+    const auto identity = m_base_url + "|" + selected.app_id;
+    if (identity != m_preview_id) {
+        m_preview.reset(); m_preview_id = identity; m_preview_changed_tick = armGetSystemTick();
+    }
+    if (selected.directory) return;
+    if (!m_preview && armTicksToNs(armGetSystemTick() - m_preview_changed_tick) >= 200000000ULL)
+        m_preview = std::make_shared<TitleMenu>(m_config, m_base_url, MakeTitlePage(selected), TitleMenu::Mode::Preview);
+    if (m_preview) m_preview->PollPreview();
+}
+
 void Menu::OnViewChange() {
     m_entry_index = 0;
-    m_banner_name.Reset();
-    m_banner_publisher.Reset();
-
-    switch (m_view.Get()) {
-        case ViewType_Icon:
-            m_list = std::make_unique<List>(5, 10, m_pos, Vec4{75.f, 140.f, 214.f, 230.f}, Vec2{15.f, 18.f});
-            break;
-
-        case ViewType_Detail:
-            grid::Menu::OnLayoutChange(m_list, grid::LayoutType_GridDetail);
-            break;
-
-        // grid::Menu knows nothing of this one, so it is built here.
-        case ViewType_Banner:
-            m_list = std::make_unique<List>(3, 6, m_pos, BANNER_ITEM, BANNER_PAD);
-            break;
-    }
-
-    // each view hands back a fresh List, which claims L2/R2 to scroll its own
-    // rows - here those are the shop's pages, so the press would do both.
+    m_banner_name.Reset(); m_banner_publisher.Reset();
+    m_list = std::make_unique<List>(2, 4, GRID_POS, GRID_ITEM, GRID_PAD);
     m_list->SetPageJump(false);
+    m_list->SetScrollBarPos(830.f, 232.f, 370.f);
 }
 
 void Menu::Update(Controller* controller, TouchInfo* touch) {
-    // an install changes what the console-crossed categories list, so the page
-    // on screen is asked for again.
+    if (m_mode == Mode::ServerList && touch->is_clicked) {
+        if (touch->in_range(Vec4{49.f, 176.f, 214.f, 42.f})) { AddServer(); return; }
+        if (touch->in_range(Vec4{49.f, 228.f, 214.f, 42.f})) { EditSelected(); return; }
+    }
     if (m_mode == Mode::Home && m_installs_shown != g_installs) {
         m_installs_shown = g_installs;
         const auto category = CATEGORIES[m_category].category;
-        if (category != sphaira::ownfoil::api::Category::All && category != sphaira::ownfoil::api::Category::Search) {
-            LoadPage(m_page);
-        }
+        if (category != sphaira::ownfoil::api::Category::All && category != sphaira::ownfoil::api::Category::Search) LoadPage(m_page);
     }
-
-    // MainMenu copies its own actions onto the current tab after OnFocusGained,
-    // so '-' and Y have to be reclaimed every frame the catalog owns them.
     if (m_mode == Mode::Home) {
-        const auto it = m_actions.find(Button::SELECT);
-        if (it == m_actions.end() || it->second.m_hint != GetViewActionHint()) {
-            SetAction(Button::SELECT, Action{GetViewActionHint(), [this]{
-                ShowOptions();
-            }});
+        const std::string primary_hint = m_sidebar_focus || m_detail_focus ? "Seleccionar" : "Ver juego";
+        if (m_actions.at(Button::A).m_hint != primary_hint) { auto action = m_actions.at(Button::A); action.m_hint = primary_hint; SetAction(Button::A, action); }
+        // The shell owns + and the header. Search/queue stay directly available
+        // while sidebar and detail navigation handle only their own controls.
+        if (!HasAction(Button::Y) || m_actions.at(Button::Y).m_hint != "Cola")
+            SetAction(Button::Y, Action{"Cola", [] { InstallQueue::Get().ShowMenu(); }});
+        if (touch->is_clicked) {
+            if (m_preview && m_preview->HandleDetailTouch(touch)) { m_detail_focus = true; m_sidebar_focus = false; return; }
+            if (touch->in_range(SEARCH_BOX)) { ShowSearch(std::size(CATEGORIES) - 1); return; }
+            if (touch->in_range(FOLDERS_BUTTON)) { ShowCategories(); return; }
+            const auto choices = PlatformChoices();
+            for (size_t row = 0; row < 6 && m_sidebar_offset + row < choices.size(); ++row) if (touch->in_range(Vec4{49.f, 169.f + float(row) * 43.f, 214.f, 37.f})) {
+                m_sidebar_index = m_sidebar_offset + row; m_sidebar_focus = true; m_detail_focus = false; ActivateSidebar(); return;
+            }
+            if (touch->in_range(Vec4{50.f, 454.f, 213.f, 40.f})) { InstallQueue::Get().ShowMenu(); return; }
+            if (touch->in_range(Vec4{50.f, 501.f, 213.f, 40.f})) { ShowOptions(); return; }
         }
-
-        const auto y = m_actions.find(Button::Y);
-        if (y == m_actions.end() || y->second.m_hint != GetCategoryActionHint()) {
-            SetAction(Button::Y, Action{GetCategoryActionHint(), [this]{
-                ShowCategories();
-            }});
+        if (!m_sidebar_focus && !m_detail_focus && !m_entries.empty()) {
+            if (controller->GotDown(Button::LEFT) && m_entry_index % 2 == 0) { m_sidebar_focus = true; }
+            else if (controller->GotDown(Button::RIGHT) && (m_entry_index % 2 == 1 || m_entry_index + 1 == static_cast<s64>(m_entries.size())) && m_preview) m_detail_focus = true;
         }
-    }
-
+    } else UpdateProfileActions();
     MenuBase::Update(controller, touch);
-
     if (m_mode == Mode::Home) {
-        if (!m_entries.empty()) {
-            m_list->OnUpdate(controller, touch, m_entry_index, m_entries.size(), [this](bool is_touch, s64 i) {
-                // a tap on the highlighted card opens it, any other only moves
-                // the highlight.
-                if (is_touch && m_entry_index == i) {
-                    FireAction(Button::A);
-                } else {
-                    m_entry_index = i;
-                }
+        if (m_sidebar_focus) {
+            const auto count = PlatformChoices().size() + 2;
+            if (controller->GotDown(Button::UP)) m_sidebar_index = (m_sidebar_index + count - 1) % count;
+            if (controller->GotDown(Button::DOWN)) m_sidebar_index = (m_sidebar_index + 1) % count;
+            if (controller->GotDown(Button::RIGHT)) m_sidebar_focus = false;
+        } else if (m_detail_focus && m_preview) {
+            Controller navigation = *controller;
+            navigation.Set(Button::A, false); navigation.Set(Button::B, false);
+            m_detail_focus = m_preview->HandleDetailController(&navigation);
+        } else if (!m_entries.empty()) {
+            m_list->OnUpdate(controller, touch, m_entry_index, m_entries.size(), [this](bool tapped, s64 index) {
+                if (tapped && m_entry_index == index) OpenSelected();
+                else { m_entry_index = index; m_sidebar_focus = false; m_detail_focus = false; }
             });
         }
+        UpdatePreview();
         return;
     }
-
     if (m_mode != Mode::ServerList || m_connecting) {
         return;
     }
@@ -385,140 +432,94 @@ void Menu::Update(Controller* controller, TouchInfo* touch) {
             m_index = i;
         }
     });
+    UpdateProfileActions();
 }
 
 void Menu::Draw(NVGcontext* vg, Theme* theme) {
     MenuBase::Draw(vg, theme);
-
-    const auto pdata = GetPolledData();
-    if (!pdata.ip) {
-        gfx::drawTextArgs(vg, SCREEN_WIDTH / 2.f, SCREEN_HEIGHT / 2.f, 36.f, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE, theme->GetColour(ThemeEntryID_TEXT_INFO), "%s", "Network access required"_i18n.c_str());
-        return;
-    }
-
-    if (m_mode == Mode::Home) {
-        DrawHome(vg, theme);
-        return;
-    }
-
+    if (m_mode == Mode::Home) { DrawHome(vg, theme); return; }
+    shop::Panel(vg, SIDEBAR, shop::Cyan);
+    shop::DrawIcon(vg, shop::Icon::User, 49.f, 121.f, 25.f, shop::Cyan);
+    shop::Text(vg, 85.f, 134.f, 23.f, shop::White, "Mi cuenta", NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE, true);
+    shop::Line(vg, 49.f, 154.f, 253.f, 154.f, shop::Alpha(shop::Cyan, .55f));
+    shop::Button(vg, {49.f, 176.f, 214.f, 42.f}, "Añadir tienda", false, true, shop::Icon::Plus, true, 18.f);
+    const bool editable = !m_focus_discover && m_index >= 0 && m_index < static_cast<s64>(m_candidates.size()) && m_candidates[m_index].saved;
+    shop::Button(vg, {49.f, 228.f, 214.f, 42.f}, "Y  Editar tienda", editable, false, shop::Icon::Settings, true, 17.f);
+    shop::Text(vg, 49.f, 301.f, 15.f, shop::Muted, "URL, puerto y ruta");
+    shop::Text(vg, 49.f, 328.f, 15.f, shop::Muted, "Usuario y contraseña");
+    shop::Text(vg, 49.f, 371.f, 14.f, shop::Muted, "Cada cuenta conserva");
+    shop::Text(vg, 49.f, 394.f, 14.f, shop::Muted, "su propio perfil.");
+    shop::Line(vg, 49.f, 438.f, 253.f, 438.f, shop::Border);
+    shop::Text(vg, 49.f, 472.f, 15.f, shop::White, "A  Conectar tienda");
+    shop::Text(vg, 49.f, 503.f, 15.f, shop::White, "X  Añadir tienda");
+    shop::Text(vg, 49.f, 534.f, 15.f, shop::White, "Y  Editar selección");
+    shop::Text(vg, 298.f, 129.f, 31.f, shop::White, "Tus tiendas", NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE, true);
+    shop::Text(vg, 299.f, 157.f, 17.f, shop::Muted, "Selecciona un perfil para conectar o editar sus datos");
+    shop::Panel(vg, {296.f, 178.f, 906.f, 432.f}, shop::Border);
     if (m_connecting) {
-        gfx::drawTextArgs(vg, SCREEN_WIDTH / 2.f, LIST_POS.y + LIST_POS.h / 2.f, 24.f, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE, theme->GetColour(ThemeEntryID_TEXT_INFO), "%s",
-            (i18n::Reorder("Connecting to ", m_connecting_name) + "...").c_str());
+        shop::Text(vg, 748.f, 349.f, 24.f, shop::White, ("Conectando con " + m_connecting_name + "...").c_str(), NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+        shop::Text(vg, 748.f, 388.f, 17.f, shop::Muted, "B Cancelar para volver a tus tiendas", NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
         return;
     }
-
     if (m_candidates.empty()) {
-        gfx::drawTextArgs(vg, SCREEN_WIDTH / 2.f, LIST_POS.y + LIST_POS.h / 2.f, 24.f, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE, theme->GetColour(ThemeEntryID_TEXT_INFO), "%s",
-            "Conecta tu tienda Ownfoil.\n\nPulsa X para añadir un perfil con la URL, usuario y contraseña de tu web.");
-    } else {
-        m_list->Draw(vg, theme, m_candidates.size(), [this](NVGcontext* vg, Theme* theme, const Vec4& v, s64 index) {
-            const auto& [x, y, w, h] = v;
-            const auto& candidate = m_candidates[index];
-            const auto& config = candidate.config;
-            const auto selected = !m_focus_discover && index == m_index;
-
-            if (selected) {
-                gfx::drawRect(vg, v, theme->GetColour(ThemeEntryID_SELECTED_BACKGROUND));
-            }
-
-            const auto text_id = selected ? ThemeEntryID_TEXT_SELECTED : ThemeEntryID_TEXT;
-            const auto info_id = selected ? ThemeEntryID_TEXT_SELECTED : ThemeEntryID_TEXT_INFO;
-
-            // only what is known: a version comes from a scan, and an entry can
-            // have either address or both.
-            std::string sub{};
-            const auto append = [&sub](const std::string& part) {
-                if (!sub.empty()) {
-                    sub += SEPARATOR;
-                }
-                sub += part;
-            };
-            if (!candidate.version.empty()) {
-                append("v" + candidate.version);
-            }
-            if (!config.local_address.empty()) {
-                append("Local"_i18n + " (" + config.local_address + ")");
-            }
-            if (!config.remote_address.empty()) {
-                append("Remote"_i18n + " (" + config.remote_address + ")");
-            }
-
-            gfx::drawTextArgs(vg, x + 20.f, y + h / 2.f - 16.f, 22.f, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE, theme->GetColour(text_id), "%s", config.name.c_str());
-            gfx::drawTextArgs(vg, x + 20.f, y + h / 2.f + 16.f, 16.f, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE, theme->GetColour(info_id), "%s", sub.c_str());
-
-            // anything the list shows that isn't saved yet came out of a scan.
-            if (!candidate.saved) {
-                const Vec4 tag{x + w - 90.f, y + h / 2.f - 14.f, 70.f, 28.f};
-                gfx::drawRect(vg, tag, theme->GetColour(ThemeEntryID_HIGHLIGHT_1), 5.f);
-                gfx::drawTextArgs(vg, tag.x + tag.w / 2.f, tag.y + tag.h / 2.f, 18.f, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE, theme->GetColour(ThemeEntryID_BACKGROUND), "%s", "New"_i18n.c_str());
-            }
-        });
-    }
-
+        shop::Text(vg, 748.f, 327.f, 25.f, shop::White, "Conecta tu tienda Ownfoil", NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE, true);
+        shop::Text(vg, 748.f, 371.f, 18.f, shop::Muted, "Pulsa X para añadir la URL, el usuario y la contraseña de tu tienda.", NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+    } else m_list->Draw(vg, theme, m_candidates.size(), [this](NVGcontext* vg, Theme*, const Vec4& row, s64 index) {
+        const auto& candidate = m_candidates[index];
+        const auto& config = candidate.config;
+        const bool selected = !m_focus_discover && index == m_index;
+        shop::Panel(vg, row, selected ? shop::Cyan : shop::Border, selected);
+        shop::DrawIcon(vg, shop::Icon::User, row.x + 14.f, row.y + 22.f, 27.f, selected ? shop::Cyan : shop::Muted);
+        shop::Text(vg, row.x + 53.f, row.y + 23.f, 21.f, shop::White, config.name.c_str(), NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE, true);
+        const auto& address = config.local_address.empty() ? config.remote_address : config.local_address;
+        nvgSave(vg); nvgIntersectScissor(vg, row.x + 53.f, row.y + 39.f, row.w - 78.f, 25.f);
+        shop::Text(vg, row.x + 53.f, row.y + 51.f, 16.f, shop::Muted, address.c_str());
+        nvgRestore(vg);
+        if (!candidate.saved) shop::Text(vg, row.x + row.w - 18.f, row.y + 22.f, 15.f, shop::Amber, "Nueva", NVG_ALIGN_RIGHT | NVG_ALIGN_MIDDLE);
+        else if (selected) shop::Text(vg, row.x + row.w - 18.f, row.y + 22.f, 15.f, shop::Cyan, "Y Editar", NVG_ALIGN_RIGHT | NVG_ALIGN_MIDDLE, true);
+    });
     DrawDiscoverButton(vg, theme);
 }
 
 void Menu::DrawHome(NVGcontext* vg, Theme* theme) {
-    if (m_entries.empty()) {
-        const auto empty = m_loading ? std::string{"Cargando catálogo..."} : CATEGORIES[m_category].category == sphaira::ownfoil::api::Category::Search
-            ? std::string{"No hay resultados para «"} + m_search + "».\nPulsa X para buscar otro nombre o quita el filtro de consola."
-            : std::string{"No hay juegos en esta selección.\nPulsa Y para elegir una carpeta o consola."};
-        gfx::drawTextArgs(vg, SCREEN_WIDTH / 2.f, SCREEN_HEIGHT / 2.f, 25.f, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE, theme->GetColour(ThemeEntryID_TEXT_INFO), "%s", empty.c_str());
-        return;
+    shop::CatalogPanelState state;
+    state.platforms = PlatformChoices();
+    if (m_sidebar_index < state.platforms.size()) {
+        if (m_sidebar_index < m_sidebar_offset) m_sidebar_offset = m_sidebar_index;
+        if (m_sidebar_index >= m_sidebar_offset + 6) m_sidebar_offset = m_sidebar_index - 5;
     }
-
-    // capped so a page of fresh artwork doesn't stall the frame on io or gpu.
+    m_sidebar_offset = std::min(m_sidebar_offset, state.platforms.size() > 6 ? state.platforms.size() - 6 : 0);
+    state.sidebar_offset = m_sidebar_offset; state.sidebar_index = m_sidebar_index;
+    state.sidebar_focused = m_sidebar_focus; state.detail_focused = m_detail_focus;
+    state.platform = m_platform;
+    state.heading = m_platform.empty() ? "Biblioteca" : m_platform == "__unknown__" ? "Sin clasificar" : m_platform;
+    state.location = "Biblioteca";
+    if (!m_folder_names.empty()) state.location += "  /  " + m_folder_names.back();
+    else if (!m_config.name.empty()) state.location += "  /  " + m_config.name;
+    state.search = m_search;
+    state.storage = m_sd_free >= 0 ? "microSD · " + utils::formatSizeStorage(m_sd_free) + " libres" : "microSD";
+    state.page = "ZL / ZR · Página " + std::to_string(m_page + 1) + " / " + std::to_string(GetPageMax());
+    state.loading = m_loading;
+    state.empty_text = m_search.empty() ? "No hay juegos en esta selección" : "No hay resultados para esta búsqueda";
     int budget = 2;
-    const auto view = m_view.Get();
-
-    m_list->Draw(vg, theme, m_entries.size(), [this, view, &budget](NVGcontext* vg, Theme* theme, const Vec4& v, s64 index) {
-        const auto& [x, y, w, h] = v;
-        auto& e = m_entries[index];
-        const auto selected = index == m_entry_index;
-
-        if (view == ViewType_Banner) {
-            if (selected) {
-                gfx::drawRectOutline(vg, theme, 4.f, v);
-            } else {
-                DrawElement(v, ThemeEntryID_GRID);
-            }
-
-            const auto text_id = selected ? ThemeEntryID_TEXT_SELECTED : ThemeEntryID_TEXT;
-            const auto info_id = selected ? ThemeEntryID_TEXT_SELECTED : ThemeEntryID_TEXT_INFO;
-            const auto xoff = (BANNER_ITEM.w - BANNER_W) / 2.f;
-            const auto image = GetImage(e, true, budget);
-
-            gfx::drawImage(vg, x + xoff, y, BANNER_W, BANNER_H, image ? image : App::GetDefaultImage(), 5.f);
-            m_banner_name.Draw(vg, selected, x + xoff, y + BANNER_H + 20.f, w - 30.f - xoff, 18.f, NVG_ALIGN_LEFT, theme->GetColour(text_id), e.app.name.c_str());
-            m_banner_publisher.Draw(vg, selected, x + xoff, y + BANNER_H + 55.f, w - 30.f - xoff, 18.f, NVG_ALIGN_LEFT, theme->GetColour(info_id), e.app.publisher.c_str());
-            return;
-        }
-
-        if (view == ViewType_Icon) {
-            const auto text_id = selected ? ThemeEntryID_TEXT_SELECTED : ThemeEntryID_TEXT;
-            const auto info_id = selected ? ThemeEntryID_TEXT_SELECTED : ThemeEntryID_TEXT_INFO;
-            gfx::drawRect(vg, v, theme->GetColour(ThemeEntryID_SELECTED_BACKGROUND), 7.f);
-            if (selected) gfx::drawRectOutline(vg, theme, 3.f, v);
-            if (e.app.directory) {
-                gfx::drawTextArgs(vg, x + w / 2.f, y + 83.f, 25.f, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE,
-                    theme->GetColour(text_id), "%s", "CARPETA");
-            } else {
-                const auto image = GetImage(e, false, budget);
-                gfx::drawImage(vg, x + (w - 174.f) / 2.f, y + 8.f, 174.f, 174.f, image ? image : App::GetDefaultImage(), 5.f);
-            }
-            m_banner_name.Draw(vg, selected, x + 10.f, y + 202.f, w - 20.f, 16.f, NVG_ALIGN_LEFT,
-                theme->GetColour(text_id), e.app.name.c_str());
-            const auto label = e.app.platform.empty() ? "Sin clasificar" : e.app.platform.c_str();
-            gfx::drawTextArgs(vg, x + 10.f, y + 222.f, 12.f, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE,
-                theme->GetColour(info_id), "%s", label);
-            if (std::find(m_config.favorites.begin(), m_config.favorites.end(), e.app.app_id) != m_config.favorites.end())
-                gfx::drawTextArgs(vg, x + w - 12.f, y + 19.f, 18.f, NVG_ALIGN_RIGHT | NVG_ALIGN_MIDDLE,
-                    theme->GetColour(text_id), "%s", "★");
-            return;
-        }
-        const auto layout = view == ViewType_Detail ? grid::LayoutType_GridDetail : grid::LayoutType_Grid;
-        DrawEntry(vg, theme, layout, v, selected, GetImage(e, false, budget), e.app.name.c_str(), e.app.publisher.c_str(), e.app.version.c_str());
+    m_list->Draw(vg, theme, m_entries.size(), [this, &state, &budget](NVGcontext*, Theme*, const Vec4& bounds, s64 index) {
+        auto& entry = m_entries[index];
+        const auto favorite_id = entry.app.type == sphaira::ownfoil::api::AppType::Base ? entry.app.app_id : entry.app.title_id;
+        const auto image = entry.app.directory ? 0 : GetImage(entry, !entry.app.banner.url.empty(), budget);
+        state.cards.push_back({entry.app.name, image == App::GetDefaultImage() ? 0 : image, entry.app.directory,
+            std::find(m_config.favorites.begin(), m_config.favorites.end(), favorite_id) != m_config.favorites.end(),
+            entry.icon.state == ImageState::Progress || entry.banner.state == ImageState::Progress, index == m_entry_index, shop::Rect{bounds}});
     });
+    shop::DrawCatalogPanel(vg, state);
+    if (m_preview) {
+        m_preview->SetDetailFocused(m_detail_focus);
+        m_preview->DrawDetailPanel(vg, theme, DETAIL_PANEL);
+    } else {
+        shop::Panel(vg, DETAIL_PANEL, shop::Violet);
+        shop::DrawIcon(vg, shop::Icon::Queue, 1002.f, 274.f, 50.f, shop::Violet);
+        const auto message = !m_entries.empty() && m_entries[m_entry_index].app.directory ? "Abre una carpeta para ver sus juegos" : "Selecciona un juego para ver su contenido";
+        shop::Text(vg, 1032.f, 354.f, 16.f, shop::Muted, message, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+    }
 }
 
 void Menu::QueuePublicArtwork(Entry& entry) {
@@ -650,32 +651,24 @@ auto Menu::GetImage(Entry& e, bool banner, int& budget) -> int {
     return image.image;
 }
 
-void Menu::DrawDiscoverButton(NVGcontext* vg, Theme* theme) const {
-    gfx::drawRect(vg, DISCOVER_BUTTON, theme->GetColour(ThemeEntryID_SELECTED_BACKGROUND), 5.f);
-
-    if (m_focus_discover) {
-        gfx::drawRectOutline(vg, theme, 4.f, DISCOVER_BUTTON);
-    }
-
-    // greyed out for the duration of the scan: it can't be started twice.
-    const auto colour_id = m_discovering ? ThemeEntryID_TEXT_INFO : (m_focus_discover ? ThemeEntryID_TEXT_SELECTED : ThemeEntryID_TEXT);
-    const auto text = m_discovering ? "Searching the network..."_i18n : "Discover local servers"_i18n;
-
-    gfx::drawTextArgs(vg, DISCOVER_BUTTON.x + DISCOVER_BUTTON.w / 2.f, DISCOVER_BUTTON.y + DISCOVER_BUTTON.h / 2.f, 22.f, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE, theme->GetColour(colour_id), "%s", text.c_str());
+void Menu::DrawDiscoverButton(NVGcontext* vg, Theme*) const {
+    shop::Button(vg, DISCOVER_BUTTON, m_discovering ? "Buscando tiendas en la red..." : "Buscar tiendas en la red local", m_focus_discover,
+        false, shop::Icon::Search, true, 20.f);
 }
 
 void Menu::ShowServerProfiles() {
     m_did_initial_setup = true;
     m_connect_stop.request_stop();
     m_connecting = false;
+    m_connect_async.reset();
     ReloadSaved();
     SetMode(Mode::ServerList);
 }
 
 void Menu::AddServer() {
+    ShowServerProfiles();
     App::Push<sphaira::ownfoil::OwnfoilForm>(sphaira::ownfoil::Config{}, [this](const auto& saved) {
-        ReloadSaved();
-        ConnectTo(saved);
+        ProfileSaved({}, saved);
     });
 }
 
@@ -916,6 +909,7 @@ void Menu::ConnectTo(const sphaira::ownfoil::Config& config) {
     const auto token = m_connect_stop.get_token();
 
     m_connecting = true;
+    SetShopConnection(false, true);
     m_connecting_name = config.name;
 
     // owned by the menu rather than fired and forgotten: ~Async joins, and a
@@ -978,9 +972,13 @@ void Menu::ConnectTo(const sphaira::ownfoil::Config& config) {
             [this, config, connect_result = std::move(connect_result), connected_config = std::move(connected_config),
                 saved_changed, fetched = std::move(fetched), fetch_error = std::move(fetch_error), total, base_url = std::move(base_url)]() mutable {
                 m_connecting = false;
+                SetShopConnection(false, false);
 
                 if (!connect_result.success) {
                     App::Notify(config.name + ": " + connect_result.error);
+                    App::Push<OptionBox>(connect_result.error + "\nPuedes corregir la URL o el acceso de esta tienda.", "Volver", "Editar tienda", 1, [this, config](auto selected) {
+                        if (selected && *selected) EditProfile(config);
+                    });
                     return;
                 }
 
@@ -995,8 +993,6 @@ void Menu::ConnectTo(const sphaira::ownfoil::Config& config) {
                     ReloadSaved();
                 }
 
-                m_config = connected_config;
-
                 // the handshake says what this caller may actually do; without
                 // shop access there is no catalog to show.
                 if (!info.features.shop) {
@@ -1009,6 +1005,9 @@ void Menu::ConnectTo(const sphaira::ownfoil::Config& config) {
                     return;
                 }
 
+                // Keep the previous working URL/account paired on a failed
+                // connection or catalog read, so B can return to that shop.
+                m_config = connected_config;
                 m_base_url = base_url;
                 m_directory_stack.clear();
                 m_folder_names.clear();
@@ -1308,6 +1307,10 @@ void Menu::ShowSearch(s64 index) {
 void Menu::ShowOptions() {
     auto options = std::make_unique<Sidebar>("Options"_i18n, Sidebar::Side::RIGHT);
     ON_SCOPE_EXIT(App::Push(std::move(options)));
+    if (m_mode == Mode::Home && !m_config.uid.empty()) {
+        options->Add<SidebarEntryCallback>("Editar tienda actual", [this] { EditCurrent(); }, true,
+            "Cambia la URL, el puerto, la ruta o el acceso de esta tienda y vuelve a conectar.");
+    }
 
     // the queue is reachable from either list, it outlives both.
     {
@@ -1322,13 +1325,12 @@ void Menu::ShowOptions() {
     }
 
     if (m_mode == Mode::ServerList) {
-        options->Add<SidebarEntryCallback>("Add server"_i18n, [this](){
+        options->Add<SidebarEntryCallback>("Añadir tienda", [this](){
             AddServer();
         }, true, "Add a server."_i18n);
 
-        // not on Y: MainMenu claims it for its menu picker while this is a tab.
-        if (!m_focus_discover && m_index < static_cast<s64>(m_candidates.size())) {
-            options->Add<SidebarEntryCallback>("Edit server"_i18n, [this](){
+        if (!m_focus_discover && m_index >= 0 && m_index < static_cast<s64>(m_candidates.size()) && m_candidates[m_index].saved) {
+            options->Add<SidebarEntryCallback>("Editar tienda", [this](){
                 EditSelected();
             }, true, "Change the selected server's name, addresses or login."_i18n);
         }
@@ -1351,35 +1353,15 @@ void Menu::ShowOptions() {
             options->Add<SidebarEntryCallback>(favorite ? "Quitar de favoritos" : "Añadir a favoritos", [this] { ToggleFavorite(); }, true);
         }
         options->Add<SidebarEntryCallback>("Consolas y carpetas", [this] { ShowCategories(); }, true);
-        SidebarEntryArray::Items view_items;
-        view_items.push_back("Icon"_i18n);
-        view_items.push_back("Banner"_i18n);
-        view_items.push_back("Detail"_i18n);
-
-        options->Add<SidebarEntryArray>("View"_i18n, view_items, [this](s64& index_out){
-            m_view.Set(index_out);
-            OnViewChange();
-        }, m_view.Get(), "Cambia la forma de mostrar las carátulas y los detalles.");
-
         SidebarEntryArray::Items page_items;
         s64 page_index{};
-        for (size_t i = 0; i < std::size(PAGE_SIZES); i++) {
-            page_items.emplace_back(std::to_string(PAGE_SIZES[i]));
-            if (PAGE_SIZES[i] == m_page_size.Get()) {
-                page_index = static_cast<s64>(i);
-            }
+        for (size_t index = 0; index < std::size(PAGE_SIZES); ++index) {
+            page_items.emplace_back(std::to_string(PAGE_SIZES[index]));
+            if (PAGE_SIZES[index] == m_page_size.Get()) page_index = index;
         }
-
-        options->Add<SidebarEntryArray>("Per page"_i18n, page_items, [this](s64& index_out){
-            const auto size = PAGE_SIZES[index_out];
-            if (size == m_page_size.Get()) {
-                return;
-            }
-            m_page_size.Set(size);
-            // the page boundaries have moved, so there is no page to stay on.
-            LoadPage(0);
-        }, page_index, "How many titles displayed per page."_i18n);
-
+        options->Add<SidebarEntryArray>("Juegos por página", page_items, [this](s64& index) {
+            if (PAGE_SIZES[index] != m_page_size.Get()) { m_page_size.Set(PAGE_SIZES[index]); LoadPage(0); }
+        }, page_index, "La vista muestra cuatro carátulas; desplázate para ver el resto o cambia de página con ZL / ZR.");
         SidebarEntryArray::Items sort_items;
         for (const auto& mode : SORT_MODES) {
             sort_items.emplace_back(i18n::get(mode.name));
@@ -1440,39 +1422,47 @@ void Menu::OpenSelected() {
         return;
     }
 
-    using AppType = sphaira::ownfoil::api::AppType;
     const auto& app = m_entries[m_entry_index].app;
     if (app.directory) { EnterDirectory(app); return; }
 
-    // an update has no page of its own, so its card opens its game's - which is
-    // whose name, publisher and artwork the card already carries.
-    TitlePage page{};
-    page.dlc = app.type == AppType::Dlc;
-    page.id = page.dlc ? app.app_id : app.title_id;
-    page.game_id = app.title_id;
-    page.artwork_id = app.artwork_id;
-    page.name = app.name;
-    page.publisher = app.publisher;
-    page.platform = app.platform;
-    page.game_name = app.game_name;
-    page.banner = app.banner;
-    page.icon = app.icon;
-    page.download = app.download;
-
-    App::Push<TitleMenu>(m_config, m_base_url, page);
+    App::Push<TitleMenu>(m_config, m_base_url, MakeTitlePage(app));
 }
 
 void Menu::EditSelected() {
     // the discover button has focus, or there is nothing saved to edit yet.
-    if (m_focus_discover || m_index >= static_cast<s64>(m_candidates.size())) {
+    if (m_focus_discover || m_index < 0 || m_index >= static_cast<s64>(m_candidates.size()) || !m_candidates[m_index].saved) {
         return;
     }
 
     // a discovered row that was never saved is edited as what it will become: the
     // form writes the entry, addresses and all, on its first save.
-    App::Push<sphaira::ownfoil::OwnfoilForm>(m_candidates[m_index].config, [this](const auto&){
-        ReloadSaved();
-    });
+    EditProfile(m_candidates[m_index].config);
+}
+
+void Menu::EditCurrent() { if (!m_config.uid.empty()) EditProfile(m_config); }
+void Menu::EditProfile(const sphaira::ownfoil::Config& config) {
+    const auto previous = config;
+    ShowServerProfiles();
+    App::Push<sphaira::ownfoil::OwnfoilForm>(previous, [this, previous](const auto& saved) { ProfileSaved(previous, saved); });
+}
+void Menu::ProfileSaved(const sphaira::ownfoil::Config& previous, const sphaira::ownfoil::Config& saved) {
+    if (!m_base_url.empty()) sphaira::ownfoil::api::InvalidateCatalog(m_base_url, previous);
+    if (!previous.resolved_url.empty()) sphaira::ownfoil::api::InvalidateCatalog(previous.resolved_url, previous);
+    m_config = saved;
+    m_base_url.clear(); m_directory_stack.clear(); m_folder_names.clear();
+    m_search.clear(); m_platform.clear(); m_pending_page.reset();
+    ReloadSaved();
+    for (size_t index = 0; index < m_candidates.size(); ++index) if (m_candidates[index].config.uid == saved.uid) {
+        m_index = index; m_focus_discover = false; break;
+    }
+    SetMode(Mode::ServerList);
+    ConnectTo(saved);
+}
+void Menu::UpdateProfileActions() {
+    if (m_mode != Mode::ServerList) return;
+    if (!m_focus_discover && m_index >= 0 && m_index < static_cast<s64>(m_candidates.size()) && m_candidates[m_index].saved)
+        SetAction(Button::Y, Action{"Editar tienda", [this] { EditSelected(); }});
+    else RemoveAction(Button::Y);
 }
 
 void Menu::DeleteSelected() {

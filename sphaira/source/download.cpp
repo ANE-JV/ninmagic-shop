@@ -1,5 +1,6 @@
 #include "download.hpp"
 #include "ninmagic_tls.hpp"
+#include "utils/curl_request.hpp"
 #include "log.hpp"
 #include "defines.hpp"
 #include "evman.hpp"
@@ -742,6 +743,9 @@ auto DownloadInternal(CURL* curl, const Api& e) -> ApiResult {
     const bool has_file = !e.GetPath().empty() && e.GetPath() != "";
     const bool has_post = !e.GetFields().empty() && e.GetFields() != "";
     const auto encoded_url = EncodeUrl(e.GetUrl());
+    const RequestHandle request_handle{curl, static_cast<bool>(e.GetFlags() & Flag_LegacyOwnfoil)};
+    curl = request_handle.Get();
+    if (!curl) return {};
 
     DataStruct chunk;
     Header header_in = e.GetHeader();
@@ -805,6 +809,7 @@ auto DownloadInternal(CURL* curl, const Api& e) -> ApiResult {
         }
     }
 
+    if ((e.GetFlags() & Flag_LegacyOwnfoil) && !AddLegacyHeaders(list)) return {};
     if (list) {
         CURL_EASY_SETOPT_LOG(curl, CURLOPT_HTTPHEADER, list);
     }
@@ -861,6 +866,10 @@ auto UploadInternal(CURL* curl, const Api& e) -> ApiResult {
     if (e.GetToken().stop_requested()) {
         return {};
     }
+
+    const RequestHandle request_handle{curl, static_cast<bool>(e.GetFlags() & Flag_LegacyOwnfoil)};
+    curl = request_handle.Get();
+    if (!curl) return {};
 
     const auto& info = e.GetUploadInfo();
     const auto url = e.GetUrl() + "/" + info.m_name;
@@ -939,6 +948,7 @@ auto UploadInternal(CURL* curl, const Api& e) -> ApiResult {
         }
     }
 
+    if ((e.GetFlags() & Flag_LegacyOwnfoil) && !AddLegacyHeaders(list)) return {};
     if (list) {
         CURL_EASY_SETOPT_LOG(curl, CURLOPT_HTTPHEADER, list);
     }

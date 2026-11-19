@@ -2,6 +2,9 @@
 #include "ui/nvg_util.hpp"
 #include "app.hpp"
 #include "log.hpp"
+#include "ui/shop_style.hpp"
+#include <algorithm>
+#include <array>
 
 namespace sphaira::ui {
 
@@ -18,6 +21,28 @@ uiButton::uiButton(Button button, const std::string& action_str)
 }
 
 auto uiButton::Draw(NVGcontext* vg, Theme* theme) -> void {
+    if (m_neon) {
+        const auto colour = m_button == Button::B ? shop::Red : m_button == Button::Y ? shop::Amber :
+            (m_button == Button::A || m_button == Button::X) ? shop::Cyan : shop::White;
+        const char* key = m_button_str.c_str();
+        switch (m_button) {
+            case Button::A: key = "A"; break;
+            case Button::B: key = "B"; break;
+            case Button::X: key = "X"; break;
+            case Button::Y: key = "Y"; break;
+            case Button::START: key = "+"; break;
+            case Button::SELECT: key = "−"; break;
+            case Button::L: key = "L"; break;
+            case Button::R: key = "R"; break;
+            case Button::L2: key = "ZL"; break;
+            case Button::R2: key = "ZR"; break;
+            default: break;
+        }
+        const auto shoulder = m_button == Button::L || m_button == Button::R || m_button == Button::L2 || m_button == Button::R2;
+        shop::ControllerHint(vg, m_button_pos.x, m_button_pos.y, key, m_action_str.c_str(), colour,
+            shoulder, m_neon_combo ? m_button == Button::R2 ? "ZL" : "L" : nullptr, m_neon_scale);
+        return;
+    }
     // enable to see button region
     // gfx::drawRect(vg, m_pos, gfx::Colour::RED);
 
@@ -169,7 +194,39 @@ auto Widget::GetUiButtons(const Actions& actions, const Vec2& button_pos) -> uiB
 }
 
 auto Widget::GetUiButtons() const -> uiButtons {
-    return GetUiButtons(m_actions, m_button_pos);
+    auto buttons = GetUiButtons(m_actions, m_button_pos);
+    if (!m_neon_buttons || buttons.empty()) return buttons;
+    constexpr std::array order{Button::A, Button::B, Button::X, Button::Y,
+        Button::L, Button::R, Button::L2, Button::R2, Button::SELECT, Button::START};
+    const auto rank = [&](Button b) { return std::find(order.begin(), order.end(), b) - order.begin(); };
+    std::stable_sort(buttons.begin(), buttons.end(), [&](const auto& a, const auto& b) { return rank(a.m_button) < rank(b.m_button); });
+    const auto vg = App::GetVg();
+    std::vector<float> widths;
+    float total = 0.f;
+    nvgFontFace(vg, nvgFindFont(vg, "ShopBold") >= 0 ? "ShopBold" : "Standard");
+    nvgFontSize(vg, 18.f);
+    for (auto& e : buttons) {
+        const auto paired = e.m_button == Button::R ? Button::L : Button::L2;
+        e.m_neon_combo = (e.m_button == Button::R || e.m_button == Button::R2) &&
+            m_actions.contains(paired) && m_actions.at(paired).m_hint.empty();
+        const auto text_width = nvgTextBounds(vg, 0, 0, e.m_action_str.c_str(), nullptr, nullptr);
+        const auto w = (e.m_neon_combo ? 74.f : e.m_button == Button::R2 || e.m_button == Button::L2 ? 40.f : 32.f) +
+            (text_width > 0 ? 10.f + text_width : 0.f) + 32.f;
+        widths.push_back(w); total += w;
+    }
+    nvgFontFace(vg, "Standard");
+    const auto scale = std::min(1.f, 1190.f / total);
+    auto x = 54.f;
+    for (size_t i = 0; i < buttons.size(); ++i) {
+        auto& e = buttons[i];
+        e.m_neon = true;
+        e.m_neon_scale = scale;
+        e.m_button_pos = {x, 658.f, (e.m_neon_combo ? 74.f : (e.m_button == Button::R2 || e.m_button == Button::L2) ? 40.f : 32.f) * scale, 32.f * scale};
+        e.m_hint_pos = {x + e.m_button_pos.w + 10.f * scale, 658.f, (widths[i] - 42.f) * scale, 32.f * scale};
+        e.SetPos({x - 5.f, 646.f, widths[i] * scale - 7.f, 58.f});
+        x += widths[i] * scale;
+    }
+    return buttons;
 }
 
 } // namespace sphaira::ui

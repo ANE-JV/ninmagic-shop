@@ -21,6 +21,7 @@ struct PolledData {
     s64 sd_total{1};
     s64 emmc_free{1};
     s64 emmc_total{1};
+    int battery{-1};
 };
 
 struct MenuBase : Widget {
@@ -61,6 +62,12 @@ struct MenuBase : Widget {
 
     static auto GetPolledData(bool force_refresh = false) -> PolledData;
 
+    void SetShopLayout(bool enabled = true) { m_shop_layout = enabled; }
+    void SetShopConnection(bool connected, bool connecting = false) {
+        m_shop_connected = connected; m_shop_connecting = connecting;
+    }
+    void SetShopAccountAction(std::function<void()> action) { m_shop_account_action = std::move(action); }
+
 private:
     std::string m_title{};
     std::string m_title_sub_heading{};
@@ -75,6 +82,10 @@ private:
     // Loaded once per menu and freed while the application's NanoVG context exists.
     int m_shop_logo{};
     bool m_shop_logo_tried{};
+    bool m_shop_layout{};
+    bool m_shop_connected{};
+    bool m_shop_connecting{};
+    std::function<void()> m_shop_account_action{};
 
     u32 m_flags{};
 };

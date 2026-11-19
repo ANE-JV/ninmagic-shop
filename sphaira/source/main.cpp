@@ -7,6 +7,8 @@
 #include "ui/menus/main_menu.hpp"
 #include "utils/core.hpp"
 
+namespace { bool shop_psm_ready{}; }
+
 int main(int argc, char** argv) {
     if (!argc || !argv) {
         return 1;
@@ -70,6 +72,9 @@ void userAppInit(void) {
     if (R_FAILED(rc = setInitialize()))
         diagAbortWithResult(rc);
 
+    // Battery display is optional; its absence must not block the shop.
+    shop_psm_ready = R_SUCCEEDED(psmInitialize());
+
     // optional on Switch 2, what uses them handles the failure.
     if (R_FAILED(rc = hidsysInitialize()) && !sphaira::platform::IsSwitch2)
         diagAbortWithResult(rc);
@@ -88,6 +93,7 @@ void userAppExit(void) {
     ncmExit();
     hidsysExit();
     setExit();
+    if (shop_psm_ready) psmExit();
     accountExit();
     nifmExit();
     plExit();

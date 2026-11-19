@@ -70,6 +70,7 @@ private:
     void StartUpdateInstall();
     void ShowShopOptions();
     void ShowCatalog();
+    void RequestExit();
 
 private:
     std::unique_ptr<MenuBase> m_centre_menu{};

@@ -35,8 +35,9 @@ auto GeneratePlaceholderUid() -> std::string {
 } // namespace
 
 OwnfoilForm::OwnfoilForm(const Config& config, const OnSaved& on_saved)
-: FormSidebar{"Conectar una tienda"}
+: FormSidebar{config.uid.empty() ? "Añadir tienda" : "Editar tienda"}
 , m_config{config}
+, m_original{config}
 , m_on_saved{on_saved} {
     SetupButtons();
 }
@@ -65,9 +66,9 @@ void OwnfoilForm::SetupButtons() {
         }
     }
     m_port = this->Add<SidebarEntryTextInput>("Puerto (opcional)", port, "", "", -1, 5,
-        "Deja vacío para usar el puerto de la URL o el predeterminado (HTTPS 443 / HTTP 80).");
+        "Puerto del servidor. Vacío usa el predeterminado: HTTPS 443 / HTTP 80.");
     m_path = this->Add<SidebarEntryTextInput>("Ruta del catálogo", path, "", "", -1, PATH_MAX,
-        "Ejemplo: / o /mi-tienda/. Se conserva la ruta escrita en la URL si dejas este campo vacío.");
+        "Ejemplo: / o /mi-tienda/. Vacío vuelve a la raíz del servidor.");
 
     m_remote_address = this->Add<SidebarEntryTextInput>(
         "URL alternativa (opcional)", m_config.remote_address, "", "", -1, PATH_MAX,
@@ -97,6 +98,7 @@ void OwnfoilForm::SetupButtons() {
             char password[1025]{};
             if (R_SUCCEEDED(swkbdShow(&keyboard, password, sizeof(password)))) {
                 m_config.pass = password;
+                m_password_edit = m_config.pass;
                 m_pass->SetValue(m_config.pass.empty() ? "" : "********");
             }
             std::fill(std::begin(password), std::end(password), 0);
@@ -117,8 +119,9 @@ void OwnfoilForm::SetupButtons() {
             ON_SCOPE_EXIT(curl_url_cleanup(parsed));
             auto rc = curl_url_set(parsed, CURLUPART_URL, primary.c_str(), 0);
             if (rc == CURLUE_OK && m_port->GetValue() != port) rc = curl_url_set(parsed, CURLUPART_PORT, m_port->GetValue().empty() ? nullptr : m_port->GetValue().c_str(), 0);
-            if (rc == CURLUE_OK && m_path->GetValue() != path && !m_path->GetValue().empty()) {
+            if (rc == CURLUE_OK && m_path->GetValue() != path) {
                 auto route = m_path->GetValue();
+                if (route.empty()) route = "/";
                 if (route.front() != '/') route = '/' + route;
                 rc = curl_url_set(parsed, CURLUPART_PATH, route.c_str(), 0);
             }
@@ -143,19 +146,17 @@ void OwnfoilForm::SetupButtons() {
             App::Notify("Introduce una URL HTTP(S) válida. Escribe usuario y contraseña en sus campos.");
             return;
         }
-        if (primary != m_config.local_address || alternative != m_config.remote_address) {
-            m_config.resolved_url.clear();
-            m_config.server_uid.clear();
+        auto edited = profile::Apply(m_original, {
+            .name=m_name->GetValue(), .local_address=primary, .remote_address=alternative,
+            .user=m_user->GetValue(), .metadata_url=m_metadata_url->GetValue(),
+            .artwork_search_url=m_artwork_search_url->GetValue(), .backend=m_config.backend,
+            .password=m_password_edit
+        });
+        if (!SaveConfig(edited)) {
+            App::Notify("No se pudo guardar la tienda. Revisa el espacio y los permisos de la microSD.");
+            return;
         }
-        m_config.name = m_name->GetValue();
-        m_config.local_address = primary;
-        m_config.remote_address = m_remote_address->GetValue();
-        m_config.user = m_user->GetValue();
-        m_config.metadata_url = m_metadata_url->GetValue();
-        m_config.artwork_search_url = m_artwork_search_url->GetValue();
-
-        // a brand new entry gets a placeholder uid until its first connect.
-        SaveConfig(m_config);
+        m_config = std::move(edited);
         App::Notify("Perfil de tienda guardado.");
 
         if (m_on_saved) {
@@ -261,29 +262,22 @@ auto IsPlaceholderUid(const std::string& uid) -> bool {
     return uid.starts_with(PLACEHOLDER_UID_PREFIX);
 }
 
-void SaveConfig(Config& config, const std::string& previous_uid) {
+auto SaveConfig(Config& config, const std::string& previous_uid) -> bool {
     if (config.uid.empty()) {
         config.uid = GeneratePlaceholderUid();
     }
 
-    // the uid is the ini section, so replacing it is a delete plus a re-write.
-    if (!previous_uid.empty() && previous_uid != config.uid) {
-        log_write("[OWNFOIL] Updating local profile key\n");
-        DeleteConfig(previous_uid);
-    }
-
     // Profiles are kept separate even when they use the same server UID.
-    fs::FsNativeSd().CreateDirectoryRecursively("/config/NinMagicShop/");
-    ini_puts(config.uid.c_str(), "server_uid", config.server_uid.c_str(), OWNFOIL_INI_PATH);
-    ini_puts(config.uid.c_str(), "backend", config.backend == Backend::JsonIndex ? "json" : config.backend == Backend::Native ? "native" : config.backend == Backend::LegacyHtml ? "legacy" : "auto", OWNFOIL_INI_PATH);
-    ini_puts(config.uid.c_str(), "name", config.name.c_str(), OWNFOIL_INI_PATH);
-    ini_puts(config.uid.c_str(), "local_address", config.local_address.c_str(), OWNFOIL_INI_PATH);
-    ini_puts(config.uid.c_str(), "artwork_search_url", config.artwork_search_url.c_str(), OWNFOIL_INI_PATH);
-    ini_puts(config.uid.c_str(), "metadata_url", config.metadata_url.c_str(), OWNFOIL_INI_PATH);
-    ini_puts(config.uid.c_str(), "remote_address", config.remote_address.c_str(), OWNFOIL_INI_PATH);
-    ini_puts(config.uid.c_str(), "user", config.user.c_str(), OWNFOIL_INI_PATH);
-    ini_puts(config.uid.c_str(), "pass", config.pass.c_str(), OWNFOIL_INI_PATH);
-    ini_puts(config.uid.c_str(), "resolved_url", config.resolved_url.c_str(), OWNFOIL_INI_PATH);
+    if (config.uid.find_first_of("[]=\r\n") != std::string::npos) return false;
+    fs::FsNativeSd disk;
+    if (R_FAILED(disk.CreateDirectoryRecursively("/config/NinMagicShop/"))) return false;
+    if (!profile::WriteFields(config, [](const std::string& uid, const std::string& key, const std::string& value) {
+        return ini_puts(uid.c_str(), key.c_str(), value.c_str(), OWNFOIL_INI_PATH) != 0;
+    })) return false;
+    if (!previous_uid.empty() && previous_uid != config.uid) {
+        if (!ini_puts(previous_uid.c_str(), nullptr, nullptr, OWNFOIL_INI_PATH)) return false;
+    }
+    return R_SUCCEEDED(disk.Commit());
 }
 
 void DeleteConfig(const std::string& uid) {

@@ -44,6 +44,8 @@ struct TitlePage {
     sphaira::ownfoil::api::ShopDownload download{};
 };
 
+auto MakeTitlePage(const sphaira::ownfoil::api::ShopApp& app) -> TitlePage;
+
 // the page's images edge to edge at the size the shop keeps them. pushed over the
 // page, which outlives it, so its smaller copies stand in while a full one loads.
 struct ScreenshotViewer final : Widget {
@@ -76,15 +78,36 @@ private:
 // one game or dlc, pushed over the catalog. the right column - the name, the
 // facts, the versions - never moves; the left is a page that scrolls under it:
 // the images, the tagline over the description, then a row per dlc.
-struct TitleMenu final : MenuBase {
-    TitleMenu(const sphaira::ownfoil::Config& config, const std::string& base_url, const TitlePage& page);
+struct TitleMenu final : MenuBase, std::enable_shared_from_this<TitleMenu> {
+    enum class Mode { FullPage, Preview };
+    TitleMenu(const sphaira::ownfoil::Config& config, const std::string& base_url, const TitlePage& page, Mode mode = Mode::FullPage);
     ~TitleMenu();
 
     auto GetShortTitle() const -> const char* override { return "Game"; }
     void Update(Controller* controller, TouchInfo* touch) override;
     void Draw(NVGcontext* vg, Theme* theme) override;
 
+    // One metadata/selection/planner owner for both the full page and the
+    // catalog's right pane. Preview polling never consumes catalog controls.
+    void PollPreview();
+    void DrawDetailPanel(NVGcontext* vg, Theme* theme, const Vec4& bounds);
+    auto HandleDetailTouch(const TouchInfo* touch) -> bool;
+    auto HandleDetailController(Controller* controller) -> bool;
+    void SetDetailFocused(bool focused) { m_detail_focused = focused; }
+    void OpenInstallOptions();
+    void QueueSelectedPackage();
+    auto IsReady() const -> bool { return m_loaded && m_console_loaded && !m_failed; }
+    auto HasFailed() const -> bool { return m_failed; }
+
 private:
+    void EnsureSelection();
+    void ChoosePanelVersion();
+    void ActivateDetailAction(s64 action);
+    auto HasBasePackage() const -> bool;
+    auto HasUpdatePackage() const -> bool;
+    auto DetailActionBounds(s64 action) const -> Vec4;
+    auto DetailActionAvailable(s64 action) const -> bool;
+
     // how long a page stays hidden waiting to open whole, from the press. on the
     // console a cached page is ready in ~70-100ms and one downloading its banner
     // in ~160-210ms, so this lets the second open whole too; a slower shop opens
@@ -171,6 +194,17 @@ private:
     const sphaira::ownfoil::Config m_config;
     const std::string m_base_url;
     const TitlePage m_page;
+    const Mode m_mode;
+    std::string m_load_error{};
+    bool m_selection_ready{};
+    bool m_base_selected{true};
+    bool m_update_selected{true};
+    bool m_dlc_selected{true};
+    bool m_detail_focused{};
+    s64 m_detail_action{3};
+    Vec4 m_detail_bounds{};
+    enum class PendingAction { None, Options, Queue };
+    PendingAction m_pending_action{PendingAction::None};
 
     // what OPEN_WAIT_MS counts from, and what the log's timings measure against.
     const TimeStamp m_opened{};
@@ -201,6 +235,8 @@ private:
     float m_intro_h{};
     float m_desc_y{};
     float m_desc_h{};
+    float m_facts_y{};
+    float m_facts_h{};
     float m_rows_y{};
     float m_content_h{};
 
