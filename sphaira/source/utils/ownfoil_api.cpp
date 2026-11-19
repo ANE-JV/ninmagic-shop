@@ -1,10 +1,13 @@
 #include "utils/ownfoil_api.hpp"
 #include "utils/ownfoil_index.hpp"
+#include "utils/ownfoil_diagnostic.hpp"
+#include "utils/ownfoil_catalog.hpp"
 
 #include "download.hpp"
 #include "defines.hpp"
 #include "log.hpp"
 #include "i18n.hpp"
+#include "fs.hpp"
 
 #include <yyjson.h>
 #include <curl/curl.h>
@@ -17,9 +20,87 @@
 #include <cstdlib>
 #include <utility>
 #include <chrono>
+#include <cstdint>
 
 namespace sphaira::ownfoil::api {
 namespace {
+
+// One report per connection attempt, independent of the general log setting.
+// A newer attempt supersedes older workers; no network operation holds this
+// mutex. Only fixed labels, booleans and aggregate counts reach the SD card.
+std::mutex g_connection_diagnostic_mutex;
+std::uint64_t g_connection_diagnostic_generation{};
+std::size_t g_connection_diagnostic_bytes{};
+constexpr auto CONNECTION_DIAGNOSTIC_PATH = "/config/NinMagicShop/connection-diagnostic.txt";
+constexpr std::size_t CONNECTION_DIAGNOSTIC_LIMIT = 16 * 1024;
+
+class ConnectionDiagnostic {
+public:
+    explicit ConnectionDiagnostic(const Config& config) {
+        std::scoped_lock lock(g_connection_diagnostic_mutex);
+        m_generation = ++g_connection_diagnostic_generation;
+        g_connection_diagnostic_bytes = 0;
+        fs::FsNativeSd disk;
+        if (R_FAILED(disk.CreateDirectoryRecursively("/config/NinMagicShop/"))) return;
+        if (auto file = std::fopen(CONNECTION_DIAGNOSTIC_PATH, "wb")) std::fclose(file);
+        else return;
+        m_ready = true;
+        WriteLocked("NinMagicShop connection diagnostic v1\n");
+        const char* backend = config.backend == Backend::Native ? "native" : config.backend == Backend::JsonIndex ? "json" : config.backend == Backend::LegacyHtml ? "legacy" : "auto";
+        WriteLocked("config backend=" + std::string(backend) + " user_present=" + std::to_string(!config.user.empty())
+            + " password_present=" + std::to_string(!config.pass.empty()) + " local_present=" + std::to_string(!config.local_address.empty())
+            + " remote_present=" + std::to_string(!config.remote_address.empty()) + " resolved_present=" + std::to_string(!config.resolved_url.empty())
+            + " negotiated_legacy=" + std::to_string(config.legacy_html) + " negotiated_index=" + std::to_string(config.json_index) + "\n");
+    }
+    void Event(const std::string& fixed_summary) const {
+        std::scoped_lock lock(g_connection_diagnostic_mutex);
+        WriteLocked(fixed_summary + '\n');
+    }
+    void Response(const char* phase, const std::string& requested, const curl::ApiResult& result) const {
+        const auto& trace = result.diagnostic;
+        Event("phase=" + std::string(phase) + " endpoint=" + diagnostic::Endpoint(requested) + " scheme=" + diagnostic::Scheme(requested)
+            + " success=" + std::to_string(result.success) + " http=" + std::to_string(result.code)
+            + " " + diagnostic::FormatBody(diagnostic::DescribeBody(result.data.empty() ? std::string_view{} : std::string_view{reinterpret_cast<const char*>(result.data.data()), result.data.size()})));
+        if (!trace.enabled) { Event("transport_trace=unavailable"); return; }
+        // Origins and peer addresses are used only for comparison, never emitted.
+        const char* origin = trace.requested_origin.empty() || trace.effective_origin.empty() ? "unavailable" : trace.requested_origin == trace.effective_origin ? "same" : "different";
+        Event("transport code=" + std::to_string(trace.transport_code) + " http_version=" + std::to_string(trace.http_version)
+            + " redirects=" + std::to_string(trace.redirect_count) + " new_connections=" + std::to_string(trace.new_connections) + " effective_endpoint=" + diagnostic::EndpointFromTransport(trace.effective_endpoint_kind)
+            + " effective_origin=" + origin + " legacy=" + std::to_string(trace.legacy) + " debug=" + std::to_string(trace.debug_enabled)
+            + " auth_user=" + std::to_string(trace.user_present) + " auth_password=" + std::to_string(trace.password_present));
+        auto version = trace.curl_version.substr(0, 512);
+        std::erase_if(version, [](unsigned char c) { return !std::isalnum(c) && std::string_view{" /._-()+"}.find(c) == std::string_view::npos; });
+        Event("curl_version=" + version);
+        for (std::size_t i{}; i < trace.request_header_names.size(); ++i) {
+            const auto names = diagnostic::DescribeHeaders(trace.request_header_names[i]);
+            const auto method = i < trace.request_methods.size() ? trace.request_methods[i] : std::string{};
+            const char* safe_method = method == "GET" ? "GET" : method == "POST" ? "POST" : method == "OPTIONS" ? "OPTIONS" : method == "HEAD" ? "HEAD" : "other";
+            Event("request=" + std::to_string(i) + " method=" + safe_method + " header_names=" + names.known + " unknown=" + std::to_string(names.unknown));
+        }
+        const auto names = diagnostic::DescribeHeaders(trace.response_header_names);
+        Event("response header_names=" + names.known + " unknown=" + std::to_string(names.unknown + trace.unknown_response_headers)
+            + " unknown_request_headers=" + std::to_string(trace.unknown_request_headers));
+        for (const auto code : trace.response_codes) Event("response_code=" + std::to_string(code));
+    }
+private:
+    void WriteLocked(const std::string& text) const {
+        if (!m_ready || m_generation != g_connection_diagnostic_generation || g_connection_diagnostic_bytes >= CONNECTION_DIAGNOSTIC_LIMIT) return;
+        if (text.size() > CONNECTION_DIAGNOSTIC_LIMIT - g_connection_diagnostic_bytes) {
+            constexpr auto marker = "report_truncated=1\n";
+            if (std::strlen(marker) <= CONNECTION_DIAGNOSTIC_LIMIT - g_connection_diagnostic_bytes) {
+                if (auto file = std::fopen(CONNECTION_DIAGNOSTIC_PATH, "ab")) { std::fwrite(marker, 1, std::strlen(marker), file); std::fclose(file); }
+            }
+            g_connection_diagnostic_bytes = CONNECTION_DIAGNOSTIC_LIMIT;
+            return;
+        }
+        if (auto file = std::fopen(CONNECTION_DIAGNOSTIC_PATH, "ab")) {
+            g_connection_diagnostic_bytes += std::fwrite(text.data(), 1, text.size(), file);
+            std::fclose(file);
+        }
+    }
+    std::uint64_t m_generation{};
+    bool m_ready{};
+};
 
 // every address ends up as the bare root url of its server.
 auto WithScheme(const char* scheme, const std::string& address) -> std::string {
@@ -198,6 +279,10 @@ auto ResolveUrl(const std::string& base, const std::string& relative) -> std::st
 using IndexCache = index::CatalogCache;
 std::mutex g_index_mutex;
 IndexCache g_index_cache;
+// Opening one game must not replace the root snapshot used by console lists.
+struct DetailIndexCache { IndexCache catalog; std::size_t bytes{}; };
+std::unordered_map<std::string, DetailIndexCache> g_detail_index_cache;
+enum class IndexScope { Catalog, GameFolder };
 std::mutex g_platform_mutex;
 std::unordered_map<std::string, std::string> g_learned_platforms;
 
@@ -241,7 +326,7 @@ auto FormValue(const std::string& value) -> std::string {
 // existing /login session. Reuse the saved account; create no users or web data.
 // A custom public JSON endpoint may be on another origin, which gets no login.
 auto FetchWebArtwork(const std::string& directory, const Config& config, std::stop_token token,
-    bool refresh, std::shared_ptr<const std::vector<index::Artwork>>& records) -> bool {
+    bool refresh, std::shared_ptr<const std::vector<index::Artwork>>& records, const ConnectionDiagnostic* diagnostic = nullptr) -> bool {
     auto root = config.resolved_url.empty() ? directory : config.resolved_url;
     if (!root.ends_with('/')) root += '/';
     auto endpoint = config.metadata_url.empty() ? ResolveUrl(root, "api/titles") : config.metadata_url;
@@ -262,9 +347,11 @@ auto FetchWebArtwork(const std::string& directory, const Config& config, std::st
         curl::Header headers;
         headers.m_map.emplace("Accept", "application/json");
         if (!cookie.empty()) headers.m_map.emplace("Cookie", cookie);
-        return curl::Api().ToMemory(curl::Url{endpoint}, std::move(headers),
+        auto result = curl::Api().ToMemory(curl::Url{endpoint}, std::move(headers),
             curl::UserPass{local ? config.user : "", local ? config.pass : ""}, curl::PreemptiveAuth{local},
-            curl::Flags{curl::Flag_KeepErrorBody | curl::Flag_NoRedirect}, curl::StopToken{token}, curl::OnProgress{bounded});
+            curl::Flags{static_cast<u32>(curl::Flag_KeepErrorBody | curl::Flag_NoRedirect | (diagnostic ? curl::Flag_ConnectionDiagnostic : 0))}, curl::StopToken{token}, curl::OnProgress{bounded});
+        if (diagnostic) diagnostic->Response(cookie.empty() ? "artwork-get" : "artwork-session-get", endpoint, result);
+        return result;
     };
     auto result = request({});
     if (token.stop_requested()) return false;
@@ -273,7 +360,8 @@ auto FetchWebArtwork(const std::string& directory, const Config& config, std::st
         const auto fields = "user=" + FormValue(config.user) + "&password=" + FormValue(config.pass);
         const auto login = curl::Api().ToMemory(curl::Url{login_url}, curl::Fields{fields},
             curl::Header{{{"Content-Type", "application/x-www-form-urlencoded"}}},
-            curl::Flags{curl::Flag_KeepErrorBody | curl::Flag_NoRedirect}, curl::StopToken{token}, curl::OnProgress{bounded});
+            curl::Flags{static_cast<u32>(curl::Flag_KeepErrorBody | curl::Flag_NoRedirect | (diagnostic ? curl::Flag_ConnectionDiagnostic : 0))}, curl::StopToken{token}, curl::OnProgress{bounded});
+        if (diagnostic) diagnostic->Response("artwork-login", login_url, login);
         if (token.stop_requested() || login.code != 302) return false;
         const auto cookie_header = login.header.Find("Set-Cookie");
         if (cookie_header == login.header.m_map.end()) return false;
@@ -296,22 +384,27 @@ auto FetchWebArtwork(const std::string& directory, const Config& config, std::st
 }
 
 auto FetchIndex(const std::string& url, const Config& config, std::stop_token token,
-    std::shared_ptr<const std::vector<index::File>>& files, std::string& error, bool refresh = false, bool* legacy_result = nullptr) -> bool {
+    std::shared_ptr<const std::vector<index::File>>& files, std::string& error, bool refresh = false, bool* legacy_result = nullptr,
+    const ConnectionDiagnostic* diagnostic = nullptr, IndexScope scope = IndexScope::Catalog) -> bool {
     if (!refresh) {
         std::scoped_lock lock(g_index_mutex);
-        if (g_index_cache.Matches(url, config.user, config.pass)) {
-            files = g_index_cache.files;
-            if (legacy_result) *legacy_result = g_index_cache.legacy;
+        const auto detail = g_detail_index_cache.find(url);
+        const auto& cache = scope == IndexScope::GameFolder && detail != g_detail_index_cache.end() ? detail->second.catalog : g_index_cache;
+        if (cache.Matches(url, config.user, config.pass)) {
+            files = cache.files;
+            if (legacy_result) *legacy_result = cache.legacy;
             return true;
         }
     }
     // Catalogues are metadata, not packages: refuse an accidental file endpoint
     // before it can grow the metadata buffer to gigabytes.
-    constexpr s64 MAX_INDEX_BYTES = 32 * 1024 * 1024;
+    const s64 max_index_bytes = scope == IndexScope::GameFolder ? 2 * 1024 * 1024 : 32 * 1024 * 1024;
     const auto request = [&](bool legacy) {
-        return curl::Api().ToMemory(curl::Url{url}, curl::UserPass{config.user, config.pass},
-            curl::PreemptiveAuth{true}, curl::Flags{static_cast<u32>(curl::Flag_KeepErrorBody | (legacy ? curl::Flag_LegacyOwnfoil : 0))}, curl::StopToken{token},
-            curl::OnProgress{[](s64 total, s64 now, s64, s64) { return total <= MAX_INDEX_BYTES && now <= MAX_INDEX_BYTES; }});
+        auto result = curl::Api().ToMemory(curl::Url{url}, curl::UserPass{config.user, config.pass},
+            curl::PreemptiveAuth{true}, curl::Flags{static_cast<u32>(curl::Flag_KeepErrorBody | (legacy ? curl::Flag_LegacyOwnfoil : 0) | (diagnostic ? curl::Flag_ConnectionDiagnostic : 0))}, curl::StopToken{token},
+            curl::OnProgress{[max_index_bytes](s64 total, s64 now, s64, s64) { return total <= max_index_bytes && now <= max_index_bytes; }});
+        if (diagnostic) diagnostic->Response(legacy ? "legacy-index-get" : "modern-index-get", url, result);
+        return result;
     };
     bool legacy = config.legacy_html || config.backend == Backend::LegacyHtml;
     auto result = request(legacy);
@@ -322,21 +415,39 @@ auto FetchIndex(const std::string& url, const Config& config, std::stop_token to
     }
     auto parsed = std::make_shared<std::vector<index::File>>();
     bool parsed_ok{};
-    if (!legacy && result.success && result.code == 200 && result.data.size() <= MAX_INDEX_BYTES) {
+    if (!legacy && result.success && result.code == 200 && result.data.size() <= static_cast<std::size_t>(max_index_bytes)) {
         parsed_ok = index::Parse(reinterpret_cast<const char*>(result.data.data()), result.data.size(), *parsed, error);
+        if (diagnostic) diagnostic->Event("parser=json accepted=" + std::to_string(parsed_ok) + " entries=" + std::to_string(parsed->size()));
     }
     if (!legacy && !parsed_ok && config.backend != Backend::JsonIndex) {
         legacy = true;
         result = request(true);
     }
-    if (!result.success || result.code != 200 || result.data.size() > MAX_INDEX_BYTES) {
+    if (!result.success || result.code != 200 || result.data.size() > static_cast<std::size_t>(max_index_bytes)) {
         error = "Could not load the shop index (HTTP error or metadata size limit)"_i18n;
         return false;
     }
-    if (legacy) parsed_ok = index::ParseHtml(reinterpret_cast<const char*>(result.data.data()), result.data.size(), *parsed, error);
-    if (parsed_ok && (legacy || !config.metadata_url.empty())) {
+    if (legacy) {
+        parsed_ok = index::ParseHtml(reinterpret_cast<const char*>(result.data.data()), result.data.size(), *parsed, error);
+        if (diagnostic) diagnostic->Event("parser=html accepted=" + std::to_string(parsed_ok) + " entries=" + std::to_string(parsed->size()));
+    }
+    if (parsed_ok && scope == IndexScope::GameFolder && parsed->size() > 4096) {
+        error = "The game folder exceeds the safe catalog scan limit"_i18n;
+        return false;
+    }
+    if (parsed_ok && scope == IndexScope::Catalog && (legacy || !config.metadata_url.empty())) {
         std::shared_ptr<const std::vector<index::Artwork>> artwork;
-        if (FetchWebArtwork(url, config, token, refresh, artwork)) index::ApplyArtwork(*parsed, *artwork);
+        if (FetchWebArtwork(url, config, token, refresh, artwork, diagnostic)) {
+            index::ApplyArtwork(*parsed, *artwork);
+            index::AddGameFolderCards(*parsed, *artwork);
+        }
+    } else if (parsed_ok && scope == IndexScope::GameFolder) {
+        std::shared_ptr<const std::vector<index::Artwork>> artwork;
+        {
+            std::scoped_lock lock(g_artwork_mutex);
+            if (g_artwork_cache.user == config.user && g_artwork_cache.pass == config.pass && IsSameOrigin(g_artwork_cache.root, url)) artwork = g_artwork_cache.records;
+        }
+        if (artwork) index::ApplyArtwork(*parsed, *artwork);
     }
     if (token.stop_requested()) return false;
     if (!parsed_ok) { error = i18n::get(error); return false; }
@@ -347,6 +458,7 @@ auto FetchIndex(const std::string& url, const Config& config, std::stop_token to
         file.url = ResolveUrl(directory_base, file.url);
         file.icon = ResolveUrl(url, file.icon);
         file.banner = ResolveUrl(url, file.banner);
+        file.source_folder = ResolveUrl(directory_base, file.source_folder);
         if (file.platform.empty()) file.platform = index::PlatformFromPath(file.url);
     }
     {
@@ -359,7 +471,13 @@ auto FetchIndex(const std::string& url, const Config& config, std::stop_token to
     std::erase_if(*parsed, [](const auto& file) { return file.url.empty(); });
     files = parsed;
     std::scoped_lock lock(g_index_mutex);
-    g_index_cache = {url, config.user, config.pass, files, legacy};
+    if (scope == IndexScope::Catalog) g_index_cache = {url, config.user, config.pass, files, legacy};
+    else {
+        std::size_t cached_bytes{};
+        for (const auto& entry : g_detail_index_cache) cached_bytes += entry.second.bytes;
+        if (g_detail_index_cache.size() >= 32 || cached_bytes + result.data.size() > 8 * 1024 * 1024) g_detail_index_cache.clear();
+        g_detail_index_cache[url] = {{url, config.user, config.pass, files, legacy}, result.data.size()};
+    }
     return true;
 }
 
@@ -381,7 +499,7 @@ auto IndexApp(const index::File& file, const std::string& base_url) -> ShopApp {
     app.version = file.version ? "v" + std::to_string(file.version) : "";
     app.icon = {file.icon, IsSameOrigin(base_url, file.icon)};
     app.banner = {file.banner, IsSameOrigin(base_url, file.banner)};
-    app.download = {file.url, file.extension, file.size, file.sha256};
+    if (file.source_folder.empty()) app.download = {file.url, file.extension, file.size, file.sha256};
     return app;
 }
 
@@ -397,6 +515,7 @@ auto FetchIndexApps(const std::string& base_url, const Config& config, std::stop
     std::unordered_map<std::string, size_t> by_id;
     const auto search = index::Lower(query.search);
     for (const auto& file : *files) {
+        if (query.consolidated ? file.directory : !file.source_folder.empty()) continue;
         bool include{};
         const auto base = file.kind == index::Kind::Base || file.kind == index::Kind::Unknown;
         switch (query.category) {
@@ -411,7 +530,7 @@ auto FetchIndexApps(const std::string& base_url, const Config& config, std::stop
         if (file.directory && query.category != Category::Search && query.category != Category::Favorites) include = true;
         if (!query.platform.empty()) {
             const auto matches = query.platform == "__unknown__" ? file.platform.empty() : file.platform == query.platform;
-            include = include && (matches || (file.directory && file.platform.empty()));
+            include = include && (matches || (!query.consolidated && file.directory && file.platform.empty()));
         }
         if (!include) continue;
         const auto key = IndexId(file);
@@ -459,11 +578,52 @@ auto FetchIndexTitle(const std::string& base_url, const Config& config, std::sto
     const std::string& id, ShopTitle& out, std::string& error) -> bool {
     std::shared_ptr<const std::vector<index::File>> files;
     if (!FetchIndex(base_url, config, token, files, error)) return false;
+    const auto folder_card = std::find_if(files->begin(), files->end(), [&id](const auto& file) {
+        return !file.source_folder.empty() && IndexId(file) == id;
+    });
+    if (folder_card != files->end()) {
+        const auto root_has_base = std::any_of(files->begin(), files->end(), [&id](const auto& file) {
+            return index::BelongsToGame(file, id) && (file.kind == index::Kind::Base || file.kind == index::Kind::Unknown);
+        });
+        const auto& folder = folder_card->source_folder;
+        if (!IsSameOrigin(base_url, folder)) { error = "The game folder is outside the configured server"_i18n; return false; }
+        // Read only this selected game's bounded subtree. No startup NAS crawl,
+        // package HEAD/download or fabricated file URL is needed for a card.
+        index::GameFolderQueue pending{folder};
+        index::GameFolderQueue::Entry current;
+        auto expanded = std::make_shared<std::vector<index::File>>(*files);
+        while (pending.Pop(current)) {
+            if (token.stop_requested()) return false;
+            std::shared_ptr<const std::vector<index::File>> contents;
+            if (!FetchIndex(current.url, config, token, contents, error, false, nullptr, nullptr, IndexScope::GameFolder)) {
+                if (!root_has_base || token.stop_requested()) return false;
+                out.catalog_partial = true;
+                error.clear();
+                break;
+            }
+            for (const auto& item : *contents) {
+                if (item.directory && IsSameOrigin(base_url, item.url) && item.url.starts_with(folder)) {
+                    pending.Add(item.url, current.depth + 1);
+                } else if (index::BelongsToGame(item, id)) {
+                    expanded->push_back(item);
+                }
+            }
+        }
+        if (pending.Incomplete()) {
+            if (!root_has_base) { error = "The game folder exceeds the safe catalog scan limit"_i18n; return false; }
+            out.catalog_partial = true;
+        }
+        if (std::none_of(expanded->begin(), expanded->end(), [&id](const auto& file) { return index::BelongsToGame(file, id); })) {
+            error = "No verified package was found for this game folder"_i18n;
+            return false;
+        }
+        files = std::move(expanded);
+    }
     bool found{};
     std::unordered_map<std::string, size_t> addons;
     for (const auto& file : *files) {
         const auto own_id = IndexId(file);
-        if (own_id != id && file.title_id != id) continue;
+        if (!index::BelongsToGame(file, id)) continue;
         found = true;
         if (own_id == id) {
             out.name = file.name;
@@ -501,14 +661,15 @@ auto FetchIndexTitle(const std::string& base_url, const Config& config, std::sto
 }
 
 // Native API first; plain JSON fallback never drops the configured credentials.
-auto TryConnect(const std::string& url, const Config& config, std::stop_token token, ConnectResult& out) -> bool {
+auto TryConnect(const std::string& url, const Config& config, std::stop_token token, ConnectResult& out, const ConnectionDiagnostic& diagnostic) -> bool {
     if (token.stop_requested() || !IsSafeAddress(url)) return false;
     log_write("[OWNFOIL] Connecting to configured server\n");
     if (config.backend != Backend::JsonIndex && config.backend != Backend::LegacyHtml) {
         const auto result = curl::Api().ToMemory(curl::Url{url}, curl::CustomRequest{"OPTIONS"},
             curl::UserPass{config.user, config.pass}, curl::PreemptiveAuth{true},
-            curl::Flags{curl::Flag_KeepErrorBody}, curl::StopToken{token},
+            curl::Flags{curl::Flag_KeepErrorBody | curl::Flag_ConnectionDiagnostic}, curl::StopToken{token},
             curl::OnProgress{[](s64 total, s64 now, s64, s64) { return total <= 1024 * 1024 && now <= 1024 * 1024; }});
+        diagnostic.Response("native-options", url, result);
         out.reached = result.code != 0;
         if (result.code == 401 || result.code == 403) {
             out.refused = true;
@@ -527,7 +688,7 @@ auto TryConnect(const std::string& url, const Config& config, std::stop_token to
     }
     std::shared_ptr<const std::vector<index::File>> files;
     out.error.clear();
-    if (!FetchIndex(url, config, token, files, out.error, true, &out.legacy_html)) return false;
+    if (!FetchIndex(url, config, token, files, out.error, true, &out.legacy_html, &diagnostic)) return false;
     out.success = true;
     out.json_index = true;
     out.base_url = out.legacy_html && !url.ends_with('/') ? url + '/' : url;
@@ -538,10 +699,10 @@ auto TryConnect(const std::string& url, const Config& config, std::stop_token to
 }
 
 // tries one address, over each scheme it could plausibly be served on.
-auto TryAddress(const std::string& address, const Config& config, std::stop_token token, ConnectResult& out) -> bool {
+auto TryAddress(const std::string& address, const Config& config, std::stop_token token, ConnectResult& out, const ConnectionDiagnostic& diagnostic) -> bool {
     for (const auto& url : BuildUrls(address)) {
         ConnectResult attempt{};
-        if (TryConnect(url, config, token, attempt)) {
+        if (TryConnect(url, config, token, attempt, diagnostic)) {
             out = std::move(attempt);
             return true;
         }
@@ -1171,6 +1332,9 @@ void InvalidateCatalog(const std::string& base_url, const Config& config) {
     std::scoped_lock lock(g_index_mutex, g_artwork_mutex, g_public_artwork_mutex);
     std::erase_if(g_public_artwork_cache, [&config](const auto& entry) { return entry.first.starts_with(config.artwork_search_url + '#'); });
     g_index_cache.Invalidate(base_url, config.user, config.pass);
+    std::erase_if(g_detail_index_cache, [&base_url, &config](const auto& entry) {
+        return entry.second.catalog.user == config.user && entry.second.catalog.pass == config.pass && IsSameOrigin(base_url, entry.first);
+    });
     if (g_artwork_cache.user == config.user && g_artwork_cache.pass == config.pass) g_artwork_cache = {};
 }
 
@@ -1179,6 +1343,7 @@ auto CachedPlatforms(const std::string& base_url, const Config& config) -> std::
     std::scoped_lock lock(g_index_mutex);
     if (!g_index_cache.files || g_index_cache.url != base_url || g_index_cache.user != config.user || g_index_cache.pass != config.pass) return out;
     for (const auto& file : *g_index_cache.files) {
+        if (file.directory) continue;
         const auto label = file.platform.empty() ? std::string{"__unknown__"} : file.platform;
         if (std::find(out.begin(), out.end(), label) == out.end()) out.push_back(label);
     }
@@ -1186,7 +1351,28 @@ auto CachedPlatforms(const std::string& base_url, const Config& config) -> std::
     return out;
 }
 
+auto CachedCatalogStatus(const std::string& base_url, const Config& config) -> CatalogStatus {
+    CatalogStatus result;
+    std::scoped_lock lock(g_index_mutex);
+    if (!g_index_cache.Matches(base_url, config.user, config.pass)) return result;
+    for (const auto& file : *g_index_cache.files) {
+        result.folders += file.directory;
+        result.mapped_folders += !file.source_folder.empty();
+    }
+    result.unresolved_folders = std::max<s64>(0, result.folders - result.mapped_folders);
+    result.partial = result.unresolved_folders != 0;
+    return result;
+}
+
 auto Connect(const Config& config, std::stop_token token) -> ConnectResult {
+    const ConnectionDiagnostic diagnostic{config};
+    const auto finish = [&](ConnectResult result) {
+        diagnostic.Event("result accepted=" + std::to_string(result.success) + " cancelled=" + std::to_string(token.stop_requested())
+            + " refused=" + std::to_string(result.refused) + " reached=" + std::to_string(result.reached)
+            + " legacy=" + std::to_string(result.legacy_html) + " index=" + std::to_string(result.json_index)
+            + " remote=" + std::to_string(result.used_remote));
+        return result;
+    };
     ConnectResult out{};
     out.error = "No address configured"_i18n;
 
@@ -1194,42 +1380,45 @@ auto Connect(const Config& config, std::stop_token token) -> ConnectResult {
     // rather than a walk down every address and scheme again.
     if (const auto resolved = ResolvedFrom(config); !resolved.url.empty()) {
         ConnectResult attempt{};
-        if (TryConnect(resolved.url, config, token, attempt)) {
+        diagnostic.Event("candidate=resolved");
+        if (TryConnect(resolved.url, config, token, attempt, diagnostic)) {
             attempt.used_remote = resolved.used_remote;
-            return attempt;
+            return finish(std::move(attempt));
         }
 
         if (attempt.refused) {
-            return attempt;
+            return finish(std::move(attempt));
         }
     }
 
-    if (!config.local_address.empty() && TryAddress(config.local_address, config, token, out)) {
+    diagnostic.Event("candidate=local");
+    if (!config.local_address.empty() && TryAddress(config.local_address, config, token, out, diagnostic)) {
         out.used_remote = false;
-        return out;
+        return finish(std::move(out));
     }
 
     // the remote address is the same shop and would answer the same way, while
     // whatever proxies it may answer less helpfully and bury the reason.
     if (out.refused) {
-        return out;
+        return finish(std::move(out));
     }
 
     if (!config.remote_address.empty()) {
         ConnectResult remote_attempt{};
-        if (TryAddress(config.remote_address, config, token, remote_attempt)) {
+        diagnostic.Event("candidate=remote");
+        if (TryAddress(config.remote_address, config, token, remote_attempt, diagnostic)) {
             remote_attempt.used_remote = true;
-            return remote_attempt;
+            return finish(std::move(remote_attempt));
         }
 
         // whichever address got an answer explains the failure better than the
         // one that stayed silent.
         if (remote_attempt.reached || !out.reached) {
-            return remote_attempt;
+            return finish(std::move(remote_attempt));
         }
     }
 
-    return out;
+    return finish(std::move(out));
 }
 
 auto FetchApps(const std::string& base_url, const Config& config, std::stop_token token, const CatalogQuery& query, std::vector<ShopApp>& out, s64& total, std::string& error) -> bool {

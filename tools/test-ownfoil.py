@@ -22,6 +22,7 @@ def main():
     parser.add_argument("--cc", default=shutil.which("gcc") or shutil.which("clang"))
     parser.add_argument("--private-fixture", type=Path, help="Optional local HTML snapshot: prints only aggregate counts")
     parser.add_argument("--private-metadata", type=Path, help="Optional local web metadata JSON: aggregate counts only")
+    parser.add_argument("--private-game-folders", type=Path, help="Optional local selected-folder captures and expected.json: aggregate counts only")
     args = parser.parse_args()
     if not args.cxx or not args.cc:
         parser.error("A host C and C++ compiler is required")
@@ -38,6 +39,17 @@ def main():
         if args.private_metadata:
             command.append(compiler_path(args.cxx, args.private_metadata))
     subprocess.run(command, check=True)
+    diagnostic_exe = args.output / ("test_ownfoil_diagnostic.exe" if sys.platform == "win32" else "test_ownfoil_diagnostic")
+    subprocess.run([args.cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-O1", "-I", compiler_path(args.cxx, ROOT / "sphaira/include"), compiler_path(args.cxx, ROOT / "tools/tests/test_ownfoil_diagnostic.cpp"), "-o", compiler_path(args.cxx, diagnostic_exe)], check=True)
+    subprocess.run([str(diagnostic_exe.resolve())], check=True)
+    catalog_exe = args.output / ("test_ownfoil_catalog.exe" if sys.platform == "win32" else "test_ownfoil_catalog")
+    subprocess.run([args.cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-O1", "-I", compiler_path(args.cxx, ROOT / "sphaira/include"), "-I", compiler_path(args.cxx, args.yyjson), compiler_path(args.cxx, ROOT / "tools/tests/test_ownfoil_catalog.cpp"), compiler_path(args.cxx, obj), "-o", compiler_path(args.cxx, catalog_exe)], check=True)
+    catalog_command = [str(catalog_exe.resolve())]
+    if args.private_fixture and args.private_metadata:
+        catalog_command.extend([compiler_path(args.cxx, args.private_fixture), compiler_path(args.cxx, args.private_metadata)])
+        if args.private_game_folders:
+            catalog_command.append(compiler_path(args.cxx, args.private_game_folders))
+    subprocess.run(catalog_command, check=True)
 
 if __name__ == "__main__":
     main()

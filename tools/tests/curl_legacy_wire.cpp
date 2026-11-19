@@ -2,13 +2,20 @@
 // The runner extracts SetCommonCurlOptions into production_curl_options.inc.
 #include <curl/curl.h>
 #include "utils/curl_request.hpp"
+#include "utils/curl_diagnostic.hpp"
+#include <cassert>
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <set>
 #include <string>
+#if defined(_WIN32) && !defined(__CYGWIN__)
+#define strncasecmp _strnicmp
+#define strcasecmp _stricmp
+#else
 #include <strings.h>
+#endif
 
 void log_write(const char*, ...) {}
 namespace ninmagic::tls {
@@ -43,6 +50,25 @@ CURLSH* g_curl_share{};
 #include "production_curl_options.inc"
 }
 using namespace sphaira::curl;
+void PrivacyChecks() {
+    const auto safe=diagnostic::SanitizeUrl("https://hidden-user:hidden-password@shop.example:8443/private-folder?token=hidden-query#hidden-fragment");
+    assert(safe.origin=="https://shop.example:8443" && safe.endpoint_kind=="other");
+    const auto login=diagnostic::SanitizeUrl("https://shop.example/login?next=hidden-query");
+    assert(login.endpoint_kind=="login");
+    diagnostic::Trace trace;
+    std::string outgoing="GET /private-folder?token=hidden-query HTTP/1.1\r\nAuthorization: Basic hidden-authorization\r\nCookie: hidden-cookie\r\nX-hidden-name: hidden-value\r\n\r\n";
+    diagnostic::Debug(nullptr,CURLINFO_HEADER_OUT,outgoing.data(),outgoing.size(),&trace);
+    std::string incoming="HTTP/1.1 302 Found\r\nLocation: https://hidden-user:hidden-password@shop.example/login?token=hidden-query\r\nSet-Cookie: hidden-session\r\n\r\n";
+    diagnostic::Debug(nullptr,CURLINFO_HEADER_IN,incoming.data(),incoming.size(),&trace);
+    std::string verbose="hidden-verbose";
+    diagnostic::Debug(nullptr,CURLINFO_TEXT,verbose.data(),verbose.size(),&trace);
+    assert(trace.request_methods==std::vector<std::string>{"GET"});
+    assert(trace.request_header_names.size()==1 && trace.unknown_request_headers==1);
+    assert(trace.response_codes==std::vector<long>{302});
+    for(const auto& names:trace.request_header_names)for(const auto& name:names)assert(name.find("hidden")==name.npos);
+    for(const auto& name:trace.response_header_names)assert(name.find("hidden")==name.npos);
+    assert(trace.curl_version.empty() && trace.effective_origin.empty());
+}
 struct Capture { std::string body; std::set<std::string> headers; };
 size_t Body(char* data, size_t size, size_t count, void* opaque) {
     const auto bytes = size * count;
@@ -75,6 +101,11 @@ bool Run(CURL* pooled, const char* url, const char* name, bool legacy, bool isol
     request.flags=Flag_KeepErrorBody | (legacy ? Flag_LegacyOwnfoil : 0);
     curl_easy_reset(handle);
     if (!SetCommonCurlOptions(handle, request)) return false;
+    if (legacy && !isolated) {
+        // Negative control: the old 0.1.1 policy reset only the easy handle.
+        curl_easy_setopt(handle, CURLOPT_FRESH_CONNECT, 0L);
+        curl_easy_setopt(handle, CURLOPT_FORBID_REUSE, 0L);
+    }
     Capture capture;
     curl_slist* headers{};
     if (legacy && !AddLegacyHeaders(headers)) return false;
@@ -90,19 +121,21 @@ bool Run(CURL* pooled, const char* url, const char* name, bool legacy, bool isol
     curl_easy_setopt(handle, CURLOPT_TIMEOUT, 10L);
     const auto result = curl_easy_perform(handle);
     curl_slist_free_all(headers);
-    long status{};
+    long status{}, new_connections{};
     curl_easy_getinfo(handle, CURLINFO_RESPONSE_CODE, &status);
+    curl_easy_getinfo(handle, CURLINFO_NUM_CONNECTS, &new_connections);
     const bool index = capture.body.find("<table>") != std::string::npos;
-    std::printf("{\"case\":\"%s\",\"http\":%ld,\"code\":%d,\"shop_index\":%s,\"header_names\":[", name, status, int(result), index ? "true" : "false");
+    std::printf("{\"case\":\"%s\",\"curl_version\":\"%s\",\"http\":%ld,\"code\":%d,\"new_connections\":%ld,\"shop_index\":%s,\"header_names\":[", name, curl_version_info(CURLVERSION_NOW)->version, status, int(result), new_connections, index ? "true" : "false");
     bool first=true;
     for (const auto& name : capture.headers) { std::printf("%s\"%s\"", first ? "" : ",", name.c_str()); first=false; }
     std::puts("]}");
     if (result != CURLE_OK || status != 200) return false;
-    if (legacy && isolated) return index && capture.headers == std::set<std::string>{"host","accept","accept-encoding","authorization"};
+    if (legacy && isolated) return index && new_connections == 1 && capture.headers == std::set<std::string>{"host","accept","accept-encoding","authorization"};
     return true;
 }
 int main(int argc, char** argv) {
     if (argc != 2 || curl_global_init(CURL_GLOBAL_DEFAULT) != CURLE_OK) return 2;
+    PrivacyChecks();
     g_curl_share=curl_share_init();
     for (auto type : {CURL_LOCK_DATA_COOKIE,CURL_LOCK_DATA_DNS,CURL_LOCK_DATA_SSL_SESSION,CURL_LOCK_DATA_CONNECT,CURL_LOCK_DATA_PSL}) curl_share_setopt(g_curl_share,CURLSHOPT_SHARE,type);
     auto pooled=curl_easy_init();

@@ -11,8 +11,8 @@ import shutil
 import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
-FILES = ("README.md", "LICENSE", ".gitignore", "CMakeLists.txt", "CMakePresets.json")
-FOLDERS = ("sphaira", "hbl", "cmake", "tools", "docs", "third_party", "assets/embed", "assets/romfs", ".github/workflows")
+FILES = ("README.md", "AGENTS.md", "LICENSE", ".gitignore", "CMakeLists.txt", "CMakePresets.json")
+FOLDERS = ("sphaira", "hbl", "cmake", "tools", "docs", "third_party", "assets/embed", "assets/romfs", ".github/workflows", ".agents")
 ASSETS = ("assets/icon.jpg", "assets/ninmagic-shop-master.png", "assets/cacert-provenance.md", "assets/design-source.json")
 SKIP_PARTS = {".git", ".local", "private", "__pycache__", "node_modules", "dist", "build", "out"}
 SKIP_SUFFIXES = {".pyc", ".exe", ".elf", ".nro", ".nacp", ".o", ".a", ".log", ".tmp"}

@@ -90,7 +90,7 @@ struct TitleMenu final : MenuBase, std::enable_shared_from_this<TitleMenu> {
     // One metadata/selection/planner owner for both the full page and the
     // catalog's right pane. Preview polling never consumes catalog controls.
     void PollPreview();
-    void DrawDetailPanel(NVGcontext* vg, Theme* theme, const Vec4& bounds);
+    void DrawDetailPanel(NVGcontext* vg, Theme* theme, const Vec4& bounds, int fallback_artwork = 0);
     auto HandleDetailTouch(const TouchInfo* touch) -> bool;
     auto HandleDetailController(Controller* controller) -> bool;
     void SetDetailFocused(bool focused) { m_detail_focused = focused; }

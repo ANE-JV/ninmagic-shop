@@ -7,6 +7,7 @@
 #include "ui/install_queue.hpp"
 #include "ui/shop_style.hpp"
 #include "ui/shop_detail_panel.hpp"
+#include "ui/shop_layout.hpp"
 #include "yati/yati.hpp"
 #include "yati/source/http.hpp"
 
@@ -93,9 +94,6 @@ constexpr float STEP_EASE = 0.12f;
 constexpr float SCROLLBAR_X = 827.f;
 constexpr float SCROLLBAR_H = 505.f;
 
-constexpr float COLUMN_X = 844.f;
-constexpr float COLUMN_Y = 108.f;
-constexpr float COLUMN_W = 376.f;
 // short enough that a two-line name and all eight rows fit, one of them a value
 // wrapped onto a second line.
 constexpr float ROW_H = 32.f;
@@ -634,20 +632,28 @@ auto TitleMenu::HandleDetailController(Controller* controller) -> bool {
     return true;
 }
 
-void TitleMenu::DrawDetailPanel(NVGcontext* vg, Theme*, const Vec4& bounds) {
+void TitleMenu::DrawDetailPanel(NVGcontext* vg, Theme*, const Vec4& bounds, int fallback_artwork) {
     m_detail_bounds = bounds;
     EnsureSelection();
     const auto note = m_failed ? "No se pudo leer el contenido" : !IsReady() ? "Consultando contenido..."
+        : m_title.catalog_partial ? "Contenido parcial: revisa los extras"
         : HasSomethingToInstall() ? "Instalar el juego con sus extras" : "Contenido instalado o sin selección";
     const auto platform = !m_title.platform.empty() ? m_title.platform : m_page.platform;
     const auto size = m_title.download_size > 0 ? m_title.download_size : m_title.size;
-    const auto footer = platform.empty() ? (size > 0 ? utils::formatSizeStorage(size) : std::string{})
-        : platform + (size > 0 ? " · " + utils::formatSizeStorage(size) : "");
+    auto metadata = size > 0 ? utils::formatSizeStorage(size) : std::string{};
+    if (!m_title.available_display.empty()) {
+        if (!metadata.empty()) metadata += " · ";
+        metadata += "v" + m_title.available_display;
+    }
+    const auto description = m_intro.empty() ? Flatten(m_title.description) : m_intro;
     sphaira::ui::shop::DetailPanelState state;
     state.title = GetName().c_str();
     state.note = note;
-    state.footer = footer.c_str();
-    state.artwork = m_banner ? m_banner : m_icon;
+    state.platform = platform.c_str();
+    state.metadata = metadata.c_str();
+    state.publisher = GetPublisher().c_str();
+    state.description = description.c_str();
+    state.artwork = m_banner ? m_banner : m_icon ? m_icon : fallback_artwork;
     state.ready = IsReady();
     state.selected = {m_base_selected, m_update_selected, m_dlc_selected};
     state.available = {DetailActionAvailable(0), DetailActionAvailable(1), DetailActionAvailable(2)};
@@ -1583,7 +1589,8 @@ void TitleMenu::DrawPage(NVGcontext* vg, Theme* theme) {
 }
 
 void TitleMenu::DrawColumn(NVGcontext* vg, Theme* theme) {
-    DrawDetailPanel(vg, theme, {COLUMN_X, COLUMN_Y, COLUMN_W, 505.f});
+    const auto bounds = sphaira::ui::shop::layout::Detail;
+    DrawDetailPanel(vg, theme, {bounds.x, bounds.y, bounds.w, bounds.h});
 }
 
 ScreenshotViewer::ScreenshotViewer(const sphaira::ownfoil::Config& config, const std::string& id, std::vector<api::ShopImage> images, std::vector<int> previews, s64 index)

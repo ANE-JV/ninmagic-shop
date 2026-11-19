@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "repository": "https://github.com/affaan-m/ECC",
+  "revision": "3f14a103a8694e51c1df9a806217a6d0b5f7a6f7",
+  "method": "Codex skill-installer; pinned download",
+  "discovery_skill": "ninmagic-shop-ecc",
+  "skills": [
+    {
+      "name": "cpp-coding-standards",
+      "source_path": "skills/cpp-coding-standards",
+      "installed_path": ".agents/skills/cpp-coding-standards",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "bytes": 22291,
+          "sha256": "f870b47d3493b0ad0b6e3808a679ac3c429b60f03193af6c9dc0e0d9e6981436",
+          "git_blob": "c74c928252aafdef6810471d8171877bc971caf8"
+        }
+      ]
+    },
+    {
+      "name": "cpp-testing",
+      "source_path": "skills/cpp-testing",
+      "installed_path": ".agents/skills/cpp-testing",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "bytes": 9175,
+          "sha256": "a92fb5da9b7e3cd1b4dee185b3eb9d0a55352af6396bf996d2eef72d683784df",
+          "git_blob": "a996a23059b5d055964ec7877167812b8fb6f20d"
+        }
+      ]
+    },
+    {
+      "name": "frontend-design-direction",
+      "source_path": "skills/frontend-design-direction",
+      "installed_path": ".agents/skills/frontend-design-direction",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "bytes": 8820,
+          "sha256": "71a40f7bc4a28da01b54527fe5590f6055c93adc630e6ceee8c892b35c980893",
+          "git_blob": "6139c73ec7de85b33d62f121cb263f95dfd69f8c"
+        },
+        {
+          "path": "scripts/check-evidence.js",
+          "bytes": 3715,
+          "sha256": "f1cefbb0c2e15ea42b82f1b11d063c54cf949acc12b5574046025c62549b6db6",
+          "git_blob": "a45d0f2b34b6385c24afcaa24e906f7976b86ff6"
+        }
+      ]
+    }
+  ],
+  "license": {
+    "path": ".agents/ECC-LICENSE.txt",
+    "git_blob": "b832b6f642312312367c07688dc7426db40a82ed",
+    "sha256": "326146379f01bb137c0a5d3c54770c1aa31076705c8b88a7f6b26a460f6221b2"
+  }
+}

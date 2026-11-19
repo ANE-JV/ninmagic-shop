@@ -1,6 +1,7 @@
 #pragma once
 
 #include "fs.hpp"
+#include "utils/curl_diagnostic.hpp"
 #include <vector>
 #include <string>
 #include <functional>
@@ -35,6 +36,9 @@ enum {
 
     // Return the first response so login can read its in-memory session cookie.
     Flag_NoRedirect = 1 << 4,
+
+    // Capture safe transport metadata for the connection diagnostic report.
+    Flag_ConnectionDiagnostic = 1 << 5,
 };
 
 enum class Priority {
@@ -146,6 +150,7 @@ struct ApiResult {
     Header header; // returned headers in request
     std::vector<u8> data; // empty if downloaded a file
     fs::FsPath path; // empty if downloaded memory
+    diagnostic::Trace diagnostic{};
 };
 
 struct DownloadEventData {

@@ -124,6 +124,8 @@ private:
     void ProfileSaved(const sphaira::ownfoil::Config& previous, const sphaira::ownfoil::Config& saved);
     void UpdateProfileActions();
     auto PlatformChoices() const -> std::vector<std::string>;
+    void SelectPlatform(const std::string& platform);
+    void ShowServerFolders();
     void ActivateSidebar();
     void UpdatePreview();
     auto FindAction(Button button) const -> std::optional<Action>;
@@ -214,13 +216,14 @@ private:
     // an index into CATEGORIES, deliberately not persisted unlike the options
     // beside it: a shop opens on New games every time it is connected to.
     s64 m_category{};
+    bool m_consolidated{true};
     std::string m_platform{};
     std::vector<std::string> m_directory_stack{};
     std::vector<std::string> m_folder_names{};
     std::string m_search{}; // not persisted either, and cleared on connect.
 
     option::OptionLong m_view{INI_SECTION, "view", ViewType_Icon};
-    option::OptionLong m_page_size{INI_SECTION, "page_size", 24};
+    option::OptionLong m_page_size{INI_SECTION, "page_size", 30};
     option::OptionLong m_sort{INI_SECTION, "sort", 0};
     option::OptionBool m_sort_desc{INI_SECTION, "sort_desc", false};
 };

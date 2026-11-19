@@ -20,6 +20,9 @@ namespace sphaira::ownfoil::index {
 enum class Kind { Base, Update, Dlc, Unknown };
 struct File {
     std::string url, name, id, title_id, publisher, icon, banner, extension, sha256, platform;
+    // A metadata-backed game card whose actual containers are read on demand.
+    // This URL is never exposed as a downloadable package.
+    std::string source_folder;
     int64_t version{};
     int64_t size{};
     Kind kind{Kind::Unknown};
@@ -187,7 +190,10 @@ inline auto Extension(std::string text) -> std::string {
     return ext == "nsp" || ext == "nsz" || ext == "xci" || ext == "xcz" ? ext : "";
 }
 inline auto CleanName(std::string text) -> std::string {
-    if (const auto dot = text.rfind('.'); dot != std::string::npos && !Extension(text).empty()) text.erase(dot);
+    if (const auto dot = text.rfind('.'); dot != std::string::npos) {
+        const auto extension = Lower(text.substr(dot + 1));
+        if (extension == "nsp" || extension == "nsz" || extension == "xci" || extension == "xcz") text.erase(dot);
+    }
     for (size_t pos = 0; (pos = text.find('[', pos)) != std::string::npos;) {
         const auto end = text.find(']', pos);
         if (end == std::string::npos) break;
@@ -309,6 +315,9 @@ inline auto Parse(const char* bytes, size_t size, std::vector<File>& out, std::s
 // its install target. A filename match must be supplied explicitly by the web.
 struct Artwork {
     std::string id, filename, icon, banner, platform;
+    std::string name, title_id;
+    Kind kind{Kind::Unknown};
+    bool owned{};
 };
 inline auto RealArtwork(std::string url) -> std::string {
     const auto lower = Lower(url);
@@ -341,6 +350,12 @@ inline auto ParseArtwork(const char* bytes, size_t size, std::vector<Artwork>& o
         if (art.id.empty()) art.id = Id(String(record, "titleId"));
         if (art.id.empty()) art.id = Id(String(record, "title_id"));
         if (art.id.empty()) art.id = Id(String(record, "id"));
+        art.title_id = Id(String(record, "title_id"));
+        art.name = String(record, "name");
+        auto kind = Lower(String(record, "app_type"));
+        if (kind.empty()) kind = Lower(String(record, "appType"));
+        art.kind = kind == "base" ? Kind::Base : kind == "update" ? Kind::Update : kind == "dlc" ? Kind::Dlc : Kind::Unknown;
+        art.owned = yyjson_is_true(yyjson_obj_get(record, "owned"));
         art.filename = String(record, "filename");
         if (art.filename.empty()) art.filename = String(record, "fileName");
         for (const auto key : {"coverUrl", "cover_url", "cover", "icon_url", "iconUrl", "icon", "thumbnailUrl", "thumbnail", "image_url", "imageUrl", "image"})
@@ -349,6 +364,9 @@ inline auto ParseArtwork(const char* bytes, size_t size, std::vector<Artwork>& o
             if (art.banner.empty()) art.banner = RealArtwork(Image(record, key));
         for (const auto key : {"platform", "console", "system"})
             if (art.platform.empty()) art.platform = PlatformMetadata(String(record, key));
+        // A known retail application in the server's library is evidence of
+        // Switch content. Custom forwarder IDs carry no original-console hint.
+        if (art.platform.empty() && art.kind != Kind::Unknown && art.id.starts_with("01")) art.platform = "Nintendo Switch";
         if (!art.id.empty() || !art.filename.empty()) out.push_back(std::move(art));
     };
     if (yyjson_is_arr(records)) {
@@ -445,6 +463,18 @@ inline auto ParseHtml(const char* bytes, size_t size, std::vector<File>& out, st
             out.clear(); return false;
         }
         if (href.empty() || href == "../" || href == "./" || href == "/") continue;
+        // Ownfoil 2.x prints filesystem names directly as hrefs. In a local
+        // directory/package name, '#' and '?' are filename bytes, not a URL
+        // fragment/query. Preserve them before RFC URL resolution can discard
+        // the rest of the path (for example a game named '#Example').
+        const auto raw_lower = Lower(href);
+        const bool local_path = href.find("://") == std::string::npos && !href.starts_with("//");
+        const bool file_path = raw_lower.ends_with(".nsp") || raw_lower.ends_with(".nsz") || raw_lower.ends_with(".xci") || raw_lower.ends_with(".xcz");
+        if (local_path && (href.ends_with('/') || file_path)) {
+            std::string escaped;
+            for (const auto c : href) escaped += c == '#' ? "%23" : c == '?' ? "%3F" : std::string(1, c);
+            href = std::move(escaped);
+        }
         if (folders.size() > 100000) { error = "El catálogo supera 100000 carpetas."; out.clear(); return false; }
         seen = true;
         if (href.ends_with('/')) {

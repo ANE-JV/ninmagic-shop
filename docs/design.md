@@ -32,11 +32,19 @@ Los perfiles permiten cambiar o retirar la dirección de metadatos. Si un provee
 El diseño aprobado es la referencia de implementación, con un lienzo lógico de 1280 × 720:
 
 - Cabecera (0–88): logo, NINMAGIC SHOP, Mi cuenta, conexión, Wi-Fi y batería real.
-- Lateral (30,108; 240 × 508): consolas, descargas, ajustes y espacio libre real.
-- Centro (298–828): título, ubicación, búsqueda, carpetas y rejilla de dos columnas por dos filas, con tarjetas de 258 × 181.
-- Panel derecho (844,108; 376 × 505): banner, contenido disponible, selección base/actualización/DLC y acciones de instalación.
+- Lateral (24,108; 204 × 508): consolas, descargas, ajustes y espacio libre real.
+- Centro (244–866): título, ubicación, búsqueda, carpetas y diez carátulas en cinco columnas por dos filas, con tarjetas de 118 × 186. Se conserva la proporción de cada imagen y se limita el título a dos líneas.
+- Panel derecho (882,108; 374 × 505): fondo del juego seleccionado, nombre, plataforma, tamaño y versión cuando existen, editor, resumen, contenido disponible, selección base/actualización/DLC y acciones de instalación.
 - Pie (638–720): A/X cian, B rojo, Y amarillo y L/R/+ blancos.
 
 La paleta compartida en `sphaira/include/ui/shop_style.hpp` fija el azul marino #030c18, cian #00eefc, violeta #9949ff y amarillo #ffc800. Los paneles, focos y botones tienen contornos luminosos dibujados por NanoVG. La fuente Barlow Bold, bajo OFL, conserva el peso de los encabezados; las fuentes del sistema cubren otros idiomas.
 
 Las tarjetas y los checks representan el catálogo recibido y la selección real del instalador. La pantalla de cuentas conserva la misma estética y expone Editar tienda. Las imágenes conceptuales no sustituyen una prueba de ejecución en consola.
+
+## Consolidación de servidores antiguos
+
+La vista por consolas reúne archivos y carpetas de juego identificables con los metadatos del servidor. Una carpeta se vincula sólo con una coincidencia de nombre base exacta y única; su contenido se consulta y se cotejan los identificadores antes de ofrecer una instalación. No se descarga el contenido de miles de carpetas al iniciar ni se modifica la autenticación del servidor. Las carpetas sin coincidencia segura siguen disponibles desde la navegación «Carpetas» y el catálogo consolidado informa de los datos parciales.
+
+Nintendo Switch figura primero; las demás consolas se obtienen de metadatos, rutas y etiquetas explícitas o del proveedor público de imágenes. Un identificador NSP propio no se convierte en uno de un juego comercial ni se usa para adivinar la plataforma.
+
+Las coordenadas de tarjetas, lateral, buscador y panel derecho se comparten entre dibujo, tacto y pruebas en `shop_layout.hpp`. Las capturas de PC utilizan NanoVG y los mismos helpers que el NRO; los datos de ejemplo y la ausencia de comprobación física se identifican expresamente.

@@ -120,6 +120,7 @@ struct CatalogQuery {
     // the bare term as typed, for Search only; the shop adds the wildcards.
     std::string search{};
     std::string platform{}; // empty = all; __unknown__ = unclassified
+    bool consolidated{}; // game cards across the root library, never directories
     // an OrderField interpolated straight into the query document, so it comes
     // from a fixed table and never from anything typed in.
     const char* order_field{"NAME"};
@@ -134,6 +135,11 @@ auto FetchApps(const std::string& base_url, const Config& config, std::stop_toke
 auto LookupPublicArtwork(const std::string& provider, const std::string& id, std::stop_token token, ShopApp& out) -> bool;
 void InvalidateCatalog(const std::string& base_url, const Config& config);
 auto CachedPlatforms(const std::string& base_url, const Config& config) -> std::vector<std::string>;
+struct CatalogStatus {
+    s64 folders{}, mapped_folders{}, unresolved_folders{};
+    bool partial{}; // directory metadata cannot safely identify every game
+};
+auto CachedCatalogStatus(const std::string& base_url, const Config& config) -> CatalogStatus;
 
 // the newest update the shop can serve for one title.
 struct ShopUpdate {
@@ -172,6 +178,7 @@ struct ShopVersion {
 // what a game or dlc page draws beyond what its card already carried.
 struct ShopTitle {
     std::string platform{};
+    bool catalog_partial{}; // an optional game subtree could not be fully read
     // also what a page opened from a game's add-on row draws, having no card.
     std::string name{};
     std::string publisher{};

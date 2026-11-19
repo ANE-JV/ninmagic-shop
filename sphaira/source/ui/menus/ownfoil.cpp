@@ -7,6 +7,7 @@
 #include "ui/install_queue.hpp"
 #include "ui/shop_style.hpp"
 #include "ui/shop_catalog_panel.hpp"
+#include "ui/shop_layout.hpp"
 #include "utils/utils.hpp"
 
 #include "app.hpp"
@@ -36,14 +37,15 @@ constexpr Vec4 LIST_POS{296.f, 182.f, 906.f, 344.f};
 constexpr Vec4 LIST_ITEM{314.f, 192.f, 870.f, 73.f};
 constexpr Vec2 LIST_PAD{0.f, 12.f};
 constexpr Vec4 DISCOVER_BUTTON{314.f, 548.f, 870.f, 48.f};
-constexpr Vec4 GRID_POS{294.f, 226.f, 540.f, 386.f};
-constexpr Vec4 GRID_ITEM{298.f, 230.f, 258.f, 181.f};
-constexpr Vec2 GRID_PAD{14.f, 11.f};
+constexpr auto ToVec4(shop::Rect rect) -> Vec4 { return {rect.x,rect.y,rect.w,rect.h}; }
+constexpr auto GRID_POS = ToVec4(shop::layout::Grid);
+constexpr auto GRID_ITEM = ToVec4(shop::layout::Card);
+constexpr Vec2 GRID_PAD{shop::layout::ColumnGap,shop::layout::RowGap};
 constexpr Vec4 SIDEBAR{30.f, 108.f, 240.f, 508.f};
-constexpr Vec4 SEARCH_BOX{298.f, 178.f, 370.f, 38.f};
-constexpr Vec4 FOLDERS_BUTTON{682.f, 178.f, 146.f, 38.f};
-constexpr Vec4 DETAIL_PANEL{844.f, 108.f, 376.f, 505.f};
-constexpr s64 PAGE_SIZES[]{12,24,48,96};
+constexpr auto SEARCH_BOX = ToVec4(shop::layout::Search);
+constexpr auto FOLDERS_BUTTON = ToVec4(shop::layout::Sections);
+constexpr auto DETAIL_PANEL = ToVec4(shop::layout::Detail);
+constexpr s64 PAGE_SIZES[]{20,30,50,100};
 
 // the title row draws the term back, so the cap keeps the header from scrolling.
 constexpr s64 SEARCH_MAX = 64;
@@ -177,7 +179,9 @@ Menu::Menu(u32 flags) : grid::Menu{"NinMagic Shop", flags} {
     }
 
     SetMode(Mode::ServerList);
-    if (std::find(std::begin(PAGE_SIZES), std::end(PAGE_SIZES), m_page_size.Get()) == std::end(PAGE_SIZES)) m_page_size.Set(24);
+    const auto saved_page_size = m_page_size.Get();
+    const auto page_size = std::lower_bound(std::begin(PAGE_SIZES), std::end(PAGE_SIZES), saved_page_size);
+    m_page_size.Set(saved_page_size <= 0 ? 30 : page_size == std::end(PAGE_SIZES) ? PAGE_SIZES[std::size(PAGE_SIZES) - 1] : *page_size);
     m_view.Set(ViewType_Icon);
     fs::FsNativeSd().GetFreeSpace("/", &m_sd_free);
 }
@@ -287,13 +291,36 @@ void Menu::CycleView() {
 }
 
 auto Menu::PlatformChoices() const -> std::vector<std::string> {
-    const std::vector<std::string> preferred{"Nintendo Switch", "Super Nintendo", "Nintendo 64", "Game Boy Advance", "PlayStation", "Mega Drive"};
     const auto available = sphaira::ownfoil::api::CachedPlatforms(m_base_url, m_config);
-    if (available.empty()) return m_config.json_index ? preferred : std::vector<std::string>{"Nintendo Switch"};
-    std::vector<std::string> choices;
-    for (const auto& label : preferred) if (std::find(available.begin(), available.end(), label) != available.end()) choices.push_back(label);
-    for (const auto& label : available) if (std::find(choices.begin(), choices.end(), label) == choices.end()) choices.push_back(label);
+    std::vector<std::string> choices{"Nintendo Switch"};
+    for (const auto& label : available) if (!label.empty() && std::find(choices.begin(), choices.end(), label) == choices.end()) choices.push_back(label);
+    for (const auto& entry : m_entries) {
+        const auto& label = entry.app.platform;
+        if (!entry.app.directory && !label.empty() && std::find(choices.begin(), choices.end(), label) == choices.end()) choices.push_back(label);
+    }
     return choices;
+}
+void Menu::SelectPlatform(const std::string& platform) {
+    m_platform = platform;
+    m_consolidated = true;
+    const auto choices = PlatformChoices();
+    const auto selected = std::find(choices.begin(), choices.end(), platform);
+    if (selected != choices.end()) m_sidebar_index = static_cast<size_t>(selected - choices.begin());
+    m_category = 0;
+    m_search.clear();
+    // Consoles refer to the shop library, even when a legacy folder was open.
+    if (!m_directory_stack.empty()) m_base_url = m_directory_stack.front();
+    m_directory_stack.clear(); m_folder_names.clear();
+    m_sidebar_focus = false; m_detail_focus = false;
+    FreeEntries(); m_pending_page.reset(); LoadPage(0);
+}
+void Menu::ShowServerFolders() {
+    if (!m_config.json_index || m_base_url.empty() || m_connecting) return;
+    if (!m_directory_stack.empty()) m_base_url = m_directory_stack.front();
+    m_directory_stack.clear(); m_folder_names.clear();
+    m_platform.clear(); m_search.clear(); m_category = 0;
+    m_consolidated = false; m_sidebar_focus = false; m_detail_focus = false;
+    FreeEntries(); m_pending_page.reset(); LoadPage(0);
 }
 void Menu::CyclePlatform(int direction) {
     if (m_mode != Mode::Home || m_connecting) return;
@@ -303,21 +330,19 @@ void Menu::CyclePlatform(int direction) {
     const auto count = static_cast<s64>(choices.size());
     const auto index = current == choices.end() ? (direction > 0 ? -1 : 0) : static_cast<s64>(current - choices.begin());
     m_sidebar_index = static_cast<size_t>((index + (direction > 0 ? 1 : -1) + count) % count);
-    m_platform = choices[m_sidebar_index];
-    FreeEntries(); m_pending_page.reset(); LoadPage(0);
+    SelectPlatform(choices[m_sidebar_index]);
 }
 void Menu::ActivateSidebar() {
     const auto choices = PlatformChoices();
     if (m_sidebar_index < choices.size()) {
-        m_platform = choices[m_sidebar_index];
-        FreeEntries(); m_pending_page.reset(); LoadPage(0);
+        SelectPlatform(choices[m_sidebar_index]);
     } else if (m_sidebar_index == choices.size()) InstallQueue::Get().ShowMenu();
     else ShowOptions();
 }
 void Menu::UpdatePreview() {
     if (m_mode != Mode::Home || m_entry_index < 0 || m_entry_index >= static_cast<s64>(m_entries.size())) return;
     const auto& selected = m_entries[m_entry_index].app;
-    const auto identity = m_base_url + "|" + selected.app_id;
+    const auto identity = m_base_url + "|" + selected.app_id + "|" + selected.download.url + "|" + selected.name;
     if (identity != m_preview_id) {
         m_preview.reset(); m_preview_id = identity; m_preview_changed_tick = armGetSystemTick();
     }
@@ -330,9 +355,9 @@ void Menu::UpdatePreview() {
 void Menu::OnViewChange() {
     m_entry_index = 0;
     m_banner_name.Reset(); m_banner_publisher.Reset();
-    m_list = std::make_unique<List>(2, 4, GRID_POS, GRID_ITEM, GRID_PAD);
+    m_list = std::make_unique<List>(shop::layout::Columns, shop::layout::VisibleCards, GRID_POS, GRID_ITEM, GRID_PAD);
     m_list->SetPageJump(false);
-    m_list->SetScrollBarPos(830.f, 232.f, 370.f);
+    m_list->SetScrollBarPos(shop::layout::GridScrollX, shop::layout::GridScrollY, shop::layout::GridScrollHeight);
 }
 
 void Menu::Update(Controller* controller, TouchInfo* touch) {
@@ -357,15 +382,29 @@ void Menu::Update(Controller* controller, TouchInfo* touch) {
             if (touch->in_range(SEARCH_BOX)) { ShowSearch(std::size(CATEGORIES) - 1); return; }
             if (touch->in_range(FOLDERS_BUTTON)) { ShowCategories(); return; }
             const auto choices = PlatformChoices();
-            for (size_t row = 0; row < 6 && m_sidebar_offset + row < choices.size(); ++row) if (touch->in_range(Vec4{49.f, 169.f + float(row) * 43.f, 214.f, 37.f})) {
+            for (size_t row = 0; row < shop::layout::VisiblePlatforms && m_sidebar_offset + row < choices.size(); ++row) if (touch->in_range(ToVec4(shop::layout::PlatformRow(row)))) {
                 m_sidebar_index = m_sidebar_offset + row; m_sidebar_focus = true; m_detail_focus = false; ActivateSidebar(); return;
             }
-            if (touch->in_range(Vec4{50.f, 454.f, 213.f, 40.f})) { InstallQueue::Get().ShowMenu(); return; }
-            if (touch->in_range(Vec4{50.f, 501.f, 213.f, 40.f})) { ShowOptions(); return; }
+            if (touch->in_range(ToVec4(shop::layout::Downloads))) { InstallQueue::Get().ShowMenu(); return; }
+            if (touch->in_range(ToVec4(shop::layout::Settings))) { ShowOptions(); return; }
+        }
+        const auto platform_viewport = shop::layout::PlatformViewport;
+        if (touch->is_end && touch->initial.x >= platform_viewport.x && touch->initial.x <= platform_viewport.x + platform_viewport.w
+            && touch->initial.y >= platform_viewport.y && touch->initial.y <= platform_viewport.y + platform_viewport.h) {
+            const auto delta = static_cast<float>(touch->initial.y) - static_cast<float>(touch->cur.y);
+            if (std::abs(delta) >= 24.f) {
+                const auto choices = PlatformChoices();
+                const auto step = static_cast<s64>(delta / shop::layout::PlatformStep);
+                const auto last = static_cast<s64>(choices.size() > shop::layout::VisiblePlatforms ? choices.size() - shop::layout::VisiblePlatforms : 0);
+                m_sidebar_offset = static_cast<size_t>(std::clamp(static_cast<s64>(m_sidebar_offset) + (step ? step : delta > 0 ? 1 : -1), s64{0}, last));
+                m_sidebar_index = m_sidebar_offset;
+                m_sidebar_focus = true; m_detail_focus = false;
+                return;
+            }
         }
         if (!m_sidebar_focus && !m_detail_focus && !m_entries.empty()) {
-            if (controller->GotDown(Button::LEFT) && m_entry_index % 2 == 0) { m_sidebar_focus = true; }
-            else if (controller->GotDown(Button::RIGHT) && (m_entry_index % 2 == 1 || m_entry_index + 1 == static_cast<s64>(m_entries.size())) && m_preview) m_detail_focus = true;
+            if (controller->GotDown(Button::LEFT) && m_entry_index % shop::layout::Columns == 0) { m_sidebar_focus = true; }
+            else if (controller->GotDown(Button::RIGHT) && (m_entry_index % shop::layout::Columns == shop::layout::Columns - 1 || m_entry_index + 1 == static_cast<s64>(m_entries.size())) && m_preview) m_detail_focus = true;
         }
     } else UpdateProfileActions();
     MenuBase::Update(controller, touch);
@@ -486,39 +525,45 @@ void Menu::DrawHome(NVGcontext* vg, Theme* theme) {
     state.platforms = PlatformChoices();
     if (m_sidebar_index < state.platforms.size()) {
         if (m_sidebar_index < m_sidebar_offset) m_sidebar_offset = m_sidebar_index;
-        if (m_sidebar_index >= m_sidebar_offset + 6) m_sidebar_offset = m_sidebar_index - 5;
+        if (m_sidebar_index >= m_sidebar_offset + shop::layout::VisiblePlatforms) m_sidebar_offset = m_sidebar_index - shop::layout::VisiblePlatforms + 1;
     }
-    m_sidebar_offset = std::min(m_sidebar_offset, state.platforms.size() > 6 ? state.platforms.size() - 6 : 0);
+    m_sidebar_offset = std::min(m_sidebar_offset, state.platforms.size() > shop::layout::VisiblePlatforms ? state.platforms.size() - shop::layout::VisiblePlatforms : 0);
     state.sidebar_offset = m_sidebar_offset; state.sidebar_index = m_sidebar_index;
     state.sidebar_focused = m_sidebar_focus; state.detail_focused = m_detail_focus;
     state.platform = m_platform;
-    state.heading = m_platform.empty() ? "Biblioteca" : m_platform == "__unknown__" ? "Sin clasificar" : m_platform;
+    state.heading = !m_consolidated ? "Carpetas del servidor" : m_platform.empty() ? "Biblioteca" : m_platform == "__unknown__" ? "Sin clasificar" : m_platform;
     state.location = "Biblioteca";
     if (!m_folder_names.empty()) state.location += "  /  " + m_folder_names.back();
     else if (!m_config.name.empty()) state.location += "  /  " + m_config.name;
     state.search = m_search;
     state.storage = m_sd_free >= 0 ? "microSD · " + utils::formatSizeStorage(m_sd_free) + " libres" : "microSD";
-    state.page = "ZL / ZR · Página " + std::to_string(m_page + 1) + " / " + std::to_string(GetPageMax());
+    state.page = m_fetch_error.empty() ? "ZL / ZR · Página " + std::to_string(m_page + 1) + " / " + std::to_string(GetPageMax()) : "No se pudo cargar · − Opciones para reintentar";
+    const auto catalog_status = sphaira::ownfoil::api::CachedCatalogStatus(m_base_url, m_config);
+    if (catalog_status.partial && m_fetch_error.empty()) state.page += " · Parcial: " + std::to_string(catalog_status.unresolved_folders) + " carpetas sin identificar";
     state.loading = m_loading;
-    state.empty_text = m_search.empty() ? "No hay juegos en esta selección" : "No hay resultados para esta búsqueda";
+    state.empty_text = !m_fetch_error.empty() ? "No se pudo cargar esta selección" : m_search.empty() ? "No hay juegos en esta selección" : "No hay resultados para esta búsqueda";
     int budget = 2;
     m_list->Draw(vg, theme, m_entries.size(), [this, &state, &budget](NVGcontext*, Theme*, const Vec4& bounds, s64 index) {
         auto& entry = m_entries[index];
         const auto favorite_id = entry.app.type == sphaira::ownfoil::api::AppType::Base ? entry.app.app_id : entry.app.title_id;
-        const auto image = entry.app.directory ? 0 : GetImage(entry, !entry.app.banner.url.empty(), budget);
+        const auto image = entry.app.directory ? 0 : GetImage(entry, entry.app.icon.url.empty() && !entry.app.banner.url.empty(), budget);
         state.cards.push_back({entry.app.name, image == App::GetDefaultImage() ? 0 : image, entry.app.directory,
             std::find(m_config.favorites.begin(), m_config.favorites.end(), favorite_id) != m_config.favorites.end(),
             entry.icon.state == ImageState::Progress || entry.banner.state == ImageState::Progress, index == m_entry_index, shop::Rect{bounds}});
     });
     shop::DrawCatalogPanel(vg, state);
     if (m_preview) {
+        int selected_image{};
+        for (const auto& card : state.cards) if (card.selected) { selected_image = card.image; break; }
         m_preview->SetDetailFocused(m_detail_focus);
-        m_preview->DrawDetailPanel(vg, theme, DETAIL_PANEL);
+        m_preview->DrawDetailPanel(vg, theme, DETAIL_PANEL, selected_image);
     } else {
         shop::Panel(vg, DETAIL_PANEL, shop::Violet);
-        shop::DrawIcon(vg, shop::Icon::Queue, 1002.f, 274.f, 50.f, shop::Violet);
+        const auto center = DETAIL_PANEL.x + DETAIL_PANEL.w * .5f;
+        shop::DrawIcon(vg, shop::Icon::Queue, center - 25.f, 274.f, 50.f, shop::Violet);
         const auto message = !m_entries.empty() && m_entries[m_entry_index].app.directory ? "Abre una carpeta para ver sus juegos" : "Selecciona un juego para ver su contenido";
-        shop::Text(vg, 1032.f, 354.f, 16.f, shop::Muted, message, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+        nvgSave(vg); nvgIntersectScissor(vg, DETAIL_PANEL.x + 12.f, DETAIL_PANEL.y + 225.f, DETAIL_PANEL.w - 24.f, 54.f);
+        shop::Text(vg, center, 354.f, 16.f, shop::Muted, message, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE); nvgRestore(vg);
     }
 }
 
@@ -692,6 +737,7 @@ void Menu::EnterDirectory(const sphaira::ownfoil::api::ShopApp& app) {
         return;
     }
     m_directory_stack.push_back(m_base_url);
+    m_consolidated = false;
     m_folder_names.push_back(app.name);
     m_base_url = app.download.url;
     FreeEntries();
@@ -895,7 +941,8 @@ void Menu::ConnectTo(const sphaira::ownfoil::Config& config) {
     // opens on rather than wherever the last one was left.
     m_category = 0; // All games: a former empty Search must not hide a new shop.
     m_search.clear();
-    m_platform.clear();
+    m_platform = "Nintendo Switch";
+    m_consolidated = true;
     m_installs_shown = g_installs;
 
     // read here rather than on the worker: option::Get() fills its cache on the
@@ -1044,6 +1091,7 @@ auto Menu::BuildQuery(s64 page) -> sphaira::ownfoil::api::CatalogQuery {
     query.category = CATEGORIES[m_category].category;
     query.search = m_search;
     query.platform = m_platform;
+    query.consolidated = m_consolidated;
     return query;
 }
 
@@ -1139,6 +1187,7 @@ void Menu::LoadPage(s64 page) {
     const auto token = m_page_stop.get_token();
 
     m_loading = true;
+    m_fetch_error.clear();
 
     // owned by the menu rather than fired and forgotten: ~Async joins, and a
     // thread can't join itself.
@@ -1157,6 +1206,7 @@ void Menu::LoadPage(s64 page) {
             [this, page, total, apps = std::move(apps), error = std::move(error)]() mutable {
                 if (!error.empty()) {
                     m_loading = false;
+                    m_fetch_error = error;
                     App::Notify(m_config.name + ": " + error);
                 } else {
                     // ApplyPage clears the flag by way of FreeEntries.
@@ -1179,6 +1229,7 @@ void Menu::LoadPage(s64 page) {
 void Menu::ApplyPage(s64 page, std::vector<sphaira::ownfoil::api::ShopApp>& apps, s64 total) {
     m_page = page;
     m_total = total;
+    m_fetch_error.clear();
 
     FreeEntries();
     m_entries.reserve(apps.size());
@@ -1230,7 +1281,7 @@ void Menu::SetCatalogTitle() {
     if (!m_folder_names.empty()) title += SEPARATOR + m_folder_names.back();
     if (CATEGORIES[m_category].category == sphaira::ownfoil::api::Category::Search) {
         title += SEPARATOR;
-        title += m_config.legacy_html ? "Carpeta actual" : m_config.json_index ? "Índice actual" : "Todo el catálogo";
+        title += m_consolidated ? (m_platform.empty() ? "Toda la biblioteca" : "Consola actual") : m_config.legacy_html ? "Carpeta actual" : m_config.json_index ? "Índice actual" : "Todo el catálogo";
     }
     SetTitleSubHeading(title);
 }
@@ -1243,6 +1294,8 @@ void Menu::ShowCategories() {
     ON_SCOPE_EXIT(App::Push(std::move(panel)));
 
     panel->Add<SidebarEntryCallback>("Actualizar catálogo", [this] { RefreshCatalog(); }, true);
+    if (m_config.json_index) panel->Add<SidebarEntryCallback>("Ver carpetas del servidor", [this] { ShowServerFolders(); }, true,
+        "Explora también las carpetas que aún no tienen un juego identificado.");
     if (!m_directory_stack.empty()) panel->Add<SidebarEntryCallback>("Volver a la carpeta anterior", [this] { GoUp(); }, true);
     for (const auto& entry : m_entries) {
         if (entry.app.directory) panel->Add<SidebarEntryCallback>(entry.app.name, [this, app = entry.app] { EnterDirectory(app); }, true);
@@ -1251,12 +1304,10 @@ void Menu::ShowCategories() {
     if (!platforms.empty()) {
         panel->Add<SidebarEntryTextBase>("Consolas detectadas", "Carpeta y metadatos consultados", SidebarEntryTextBase::Callback{});
         panel->Add<SidebarEntryCallback>("Todas las consolas", [this] {
-            m_platform.clear(); FreeEntries(); m_pending_page.reset(); LoadPage(0);
+            SelectPlatform("");
         }, true);
         for (const auto& platform : platforms) {
-            panel->Add<SidebarEntryCallback>(platform == "__unknown__" ? "Sin clasificar" : platform, [this, platform] {
-                m_platform = platform; FreeEntries(); m_pending_page.reset(); LoadPage(0);
-            }, true);
+            panel->Add<SidebarEntryCallback>(platform == "__unknown__" ? "Sin clasificar" : platform, [this, platform] { SelectPlatform(platform); }, true);
         }
     }
     for (s64 i = 0; i < static_cast<s64>(std::size(CATEGORIES)); i++) {
@@ -1283,7 +1334,8 @@ void Menu::ShowSearch(s64 index) {
 
     // the term on screen is the initial text: narrowing a search that came back
     // too wide is far more common than starting an unrelated one.
-    if (R_FAILED(swkbd::ShowText(term, "Buscar juego", m_config.legacy_html ? "Nombre o parte del nombre · carpeta actual" : m_config.json_index ? "Nombre o ID · índice actual" : "Nombre o ID · todo el catálogo", m_search.c_str(), 1, SEARCH_MAX)) || term.empty()) {
+    const auto search_hint = m_consolidated ? (m_platform.empty() ? "Nombre o ID · toda la biblioteca" : "Nombre o ID · consola actual") : m_config.legacy_html ? "Nombre o parte del nombre · carpeta actual" : m_config.json_index ? "Nombre o ID · índice actual" : "Nombre o ID · todo el catálogo";
+    if (R_FAILED(swkbd::ShowText(term, "Buscar juego", search_hint, m_search.c_str(), 1, SEARCH_MAX)) || term.empty()) {
         // backing out of the keyboard leaves the catalog that was up, up.
         return;
     }
@@ -1361,7 +1413,7 @@ void Menu::ShowOptions() {
         }
         options->Add<SidebarEntryArray>("Juegos por página", page_items, [this](s64& index) {
             if (PAGE_SIZES[index] != m_page_size.Get()) { m_page_size.Set(PAGE_SIZES[index]); LoadPage(0); }
-        }, page_index, "La vista muestra cuatro carátulas; desplázate para ver el resto o cambia de página con ZL / ZR.");
+        }, page_index, "Diez carátulas a la vez. Desplázate para ver el resto o cambia de página con ZL / ZR.");
         SidebarEntryArray::Items sort_items;
         for (const auto& mode : SORT_MODES) {
             sort_items.emplace_back(i18n::get(mode.name));

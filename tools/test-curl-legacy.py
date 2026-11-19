@@ -60,6 +60,10 @@ def main():
             sdk = Path("C:/devkitPro")
     parser.add_argument("--curl-include", type=Path, default=sdk / "portlibs/switch/include")
     parser.add_argument("--curl-library", default=str(sdk / "msys2/usr/bin/msys-curl-4.dll") if sys.platform == "win32" else None)
+    parser.add_argument("--curl-static", action="store_true", help="Use a native static libcurl build")
+    parser.add_argument("--link-library", type=Path, action="append", default=[])
+    parser.add_argument("--link-arg", action="append", default=[])
+    parser.add_argument("--expected-curl-version", help="Reject a different host libcurl version")
     args = parser.parse_args()
     if not args.cxx or not (args.curl_include / "curl/curl.h").is_file():
         parser.error("A host C++ compiler and libcurl headers are required")
@@ -77,6 +81,9 @@ def main():
     (args.output / "production_curl_options.inc").write_text(source[start:end], encoding="utf-8")
     executable = args.output / ("curl_legacy_wire.exe" if sys.platform == "win32" else "curl_legacy_wire")
     command = [args.cxx, "-std=c++20", "-O1", "-Wno-deprecated-declarations", "-I", compiler_path(args.cxx, args.curl_include), "-I", compiler_path(args.cxx, ROOT / "sphaira/include"), "-I", compiler_path(args.cxx, args.output), compiler_path(args.cxx, ROOT / "tools/tests/curl_legacy_wire.cpp"), library, "-o", compiler_path(args.cxx, executable)]
+    if args.curl_static:
+        command.insert(1, "-DCURL_STATICLIB")
+    command += [compiler_path(args.cxx, item) for item in args.link_library] + args.link_arg
     subprocess.run(command, check=True)
     server = ThreadingHTTPServer(("127.0.0.1", 0), OwnfoilFixture)
     server.daemon_threads = True
@@ -89,6 +96,8 @@ def main():
         server.server_close()
         worker.join()
     rows = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+    if args.expected_curl_version:
+        assert rows and all(row["curl_version"] == args.expected_curl_version for row in rows), "Unexpected host libcurl version"
     fixed = [row for row in rows if row["case"] in ("fresh_legacy", "legacy_after_native", "legacy_repeat")]
     assert len(fixed) == 3 and all(row["shop_index"] for row in fixed), rows
     print(json.dumps({"cases": rows, "result": "PASS; production options and handle policy used; loopback only, synthetic credentials"}, indent=2))

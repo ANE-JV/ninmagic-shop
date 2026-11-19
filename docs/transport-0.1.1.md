@@ -1,5 +1,7 @@
 # Corrección del catálogo legacy para 0.1.1
 
+Esta prueba inicial usó libcurl 8.13.0. La versión 7.69.1 del SDK conserva además TE en la conexión compartida; crear otro easy handle no basta. La corrección y la reproducción con esa versión se documentan en [0.1.2](transport-0.1.2.md).
+
 El fallo de 0.1.0 se reprodujo con libcurl nativo y la función
 `SetCommonCurlOptions` extraída de `download.cpp`. Un handle limpio obtenía el
 listado correcto. Después de una petición moderna, el mismo handle conservaba

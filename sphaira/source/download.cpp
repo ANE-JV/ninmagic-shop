@@ -677,6 +677,7 @@ auto SetCommonCurlOptions(CURL* curl, const Api& e) -> bool {
 
     // enable TE is server supports it.
     CURL_EASY_SETOPT_LOG(curl, CURLOPT_TRANSFER_ENCODING, (e.GetFlags() & Flag_LegacyOwnfoil) ? 0L : 1L);
+    if ((e.GetFlags() & Flag_LegacyOwnfoil) && !ConfigureLegacyConnection(curl)) return false;
 
     // set flags.
     if (e.GetFlags() & Flag_NoBody) {
@@ -819,6 +820,8 @@ auto DownloadInternal(CURL* curl, const Api& e) -> ApiResult {
     CURL_EASY_SETOPT_LOG(curl, CURLOPT_WRITEDATA, &chunk);
 
     // perform download and cleanup after and report the result.
+    diagnostic::Scope diagnostic_scope{curl, static_cast<bool>(e.GetFlags() & Flag_ConnectionDiagnostic),
+        static_cast<bool>(e.GetFlags() & Flag_LegacyOwnfoil), e.GetUrl(), !e.GetUserPass().m_user.empty(), !e.GetUserPass().m_pass.empty()};
     const auto res = curl_easy_perform(curl);
     bool success = res == CURLE_OK;
 
@@ -858,7 +861,7 @@ auto DownloadInternal(CURL* curl, const Api& e) -> ApiResult {
     }
 
     log_write("[CURL] download HTTP %ld: %s\n", http_code, curl_easy_strerror(res));
-    return {success, http_code, header_out, chunk.data, e.GetPath()};
+    return {success, http_code, header_out, chunk.data, e.GetPath(), diagnostic_scope.Finish(res)};
 }
 
 auto UploadInternal(CURL* curl, const Api& e) -> ApiResult {
@@ -978,6 +981,8 @@ auto UploadInternal(CURL* curl, const Api& e) -> ApiResult {
     CURL_EASY_SETOPT_LOG(curl, CURLOPT_WRITEDATA, &chunk_out);
 
     // perform upload and cleanup after and report the result.
+    diagnostic::Scope diagnostic_scope{curl, static_cast<bool>(e.GetFlags() & Flag_ConnectionDiagnostic),
+        static_cast<bool>(e.GetFlags() & Flag_LegacyOwnfoil), e.GetUrl(), !e.GetUserPass().m_user.empty(), !e.GetUserPass().m_pass.empty()};
     const auto res = curl_easy_perform(curl);
     bool success = res == CURLE_OK;
 
@@ -989,7 +994,7 @@ auto UploadInternal(CURL* curl, const Api& e) -> ApiResult {
     }
 
     log_write("[CURL] upload HTTP %ld: %s\n", http_code, curl_easy_strerror(res));
-    return {success, http_code, header_out, chunk_out.data};
+    return {success, http_code, header_out, chunk_out.data, {}, diagnostic_scope.Finish(res)};
 }
 
 void my_lock(CURL *handle, curl_lock_data data, curl_lock_access laccess, void *useptr) {

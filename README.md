@@ -1,4 +1,4 @@
-# NinMagic Shop 0.1.1 — beta
+# NinMagic Shop 0.1.3 — beta
 
 Tienda para Nintendo Switch con Atmosphère. Acceso a tu servidor, catálogo con carátulas, búsqueda, favoritos y cola de instalación. Proyecto separado de las demás aplicaciones NinMagic.
 
@@ -6,7 +6,7 @@ Deriva de [Sphaira 1.1.1](https://github.com/NaGaa95/sphaira), cuyo cliente Ownf
 
 ## Instalación
 
-Descarga [NinMagic-Shop-0.1.1.zip](https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/main/releases/0.1.1/NinMagic-Shop-0.1.1.zip) y extráelo en la raíz de la microSD. La aplicación queda en:
+Descarga [NinMagic-Shop-0.1.3.zip](https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/main/releases/0.1.3/NinMagic-Shop-0.1.3.zip) y extráelo en la raíz de la microSD. La aplicación queda en:
 
 ```
 sdmc:/switch/NinMagicShop/NinMagic-Shop.nro
@@ -43,7 +43,7 @@ Se verifica el certificado y el nombre del servidor HTTPS. No se convierte autom
 | + | Menú Shop: cuenta, cola, instalados, ajustes, actualizar y salir. |
 | L / R | Cambiar de consola en la biblioteca. |
 
-La biblioteca sigue el diseño de tres columnas: consolas, descargas y ajustes a la izquierda; buscador, carpetas y cuatro carátulas en el centro; contenido del juego seleccionado y botones de instalación a la derecha. Los botones A/X son cian, B rojo, Y amarillo y L/R/+ blancos.
+La biblioteca sigue el diseño de tres columnas: consolas, descargas y ajustes a la izquierda; buscador y diez carátulas visibles en el centro, distribuidas en cinco columnas y dos filas; información, fondo del juego seleccionado y botones de instalación a la derecha. Nintendo Switch aparece primero en el lateral y se selecciona al conectar. Los botones A/X son cian, B rojo, Y amarillo y L/R/+ blancos.
 
 La cruceta y el stick izquierdo recorren los juegos. Desde el borde izquierdo se accede a las consolas y desde el derecho al contenido del paquete. Los controles visibles también responden al tacto. Las indicaciones de la parte inferior muestran las acciones disponibles en cada pantalla. Las fichas permiten consultar el contenido disponible y preparar la instalación.
 
@@ -65,7 +65,7 @@ La cola permite consultar el progreso y los errores. Mantén la aplicación abie
 
 Al conectar la tienda se consulta el catálogo. Usa **Actualizar catálogo** para consultar los cambios sin cerrar la aplicación. Un juego o una carátula nuevos no requieren publicar otro NRO: deben estar disponibles en el índice o listado que exponga el servidor.
 
-En API nativa la búsqueda puede consultar el catálogo del servidor. En el modo de directorios la búsqueda y los filtros se aplican a la carpeta que se está mostrando; la interfaz indica ese ámbito.
+En API nativa la búsqueda puede consultar el catálogo del servidor. En listados antiguos, la vista por consolas reúne los archivos conocidos y las carpetas de juego que tienen una coincidencia exacta y única en los metadatos. El contenido de cada carpeta se comprueba al abrir el juego. Las carpetas que no se pueden identificar con certeza se conservan en «Carpetas», sin inventar su identidad. La interfaz indica cuándo el catálogo consolidado es parcial.
 
 ## Actualizar NinMagic Shop
 
@@ -85,6 +85,20 @@ La descarga se fija a un commit de este repositorio y comprueba tamaño, SHA-256
 - `config/NinMagicShop/`: perfiles, preferencias y estado del actualizador.
 
 Los perfiles guardados contienen las credenciales en la microSD. No compartas esa carpeta como parte de un pack público. Los ZIP publicados contienen la aplicación y sus licencias, sin perfiles personales ni juegos.
+
+## Cambios de 0.1.3
+
+- Consolas a la izquierda con Nintendo Switch primero, rejilla de cinco columnas por dos filas y navegación táctil/mando ajustada a esa distribución.
+- Panel derecho con la imagen del juego como fondo, información real y selección de base, actualización y DLC.
+- Vista consolidada para los servidores antiguos que ofrecen carpetas por juego. Sólo se vinculan carpetas con identidad comprobable y se valida su contenido antes de instalar.
+- Skills ECC fijadas y guía de proyecto incluidas en las fuentes; revisión visual con los helpers de dibujo de producción.
+
+## Corrección de transporte incorporada desde la prueba 0.1.2
+
+- Las peticiones a Ownfoil antiguo abren una conexión TCP nueva y la cierran al finalizar. Corrige las cabeceras TE/Connection conservadas dentro de conexiones compartidas por libcurl 7.69.1, la versión del SDK de Switch.
+- Se conserva la verificación HTTPS y la caché de DNS y sesiones TLS.
+- Cada intento de conexión genera `config/NinMagicShop/connection-diagnostic.txt`, máximo 16 KiB, con fases, códigos, tipos de respuesta y nombres de cabeceras permitidas. No guarda la contraseña, el usuario, las URL ni el contenido de las respuestas.
+- La regresión de red comprueba el aislamiento de las conexiones, además de sus cabeceras.
 
 ## Cambios de 0.1.1
 

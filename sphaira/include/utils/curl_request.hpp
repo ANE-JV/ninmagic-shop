@@ -32,4 +32,13 @@ inline auto AddLegacyHeaders(curl_slist*& list) -> bool {
     return true;
 }
 
+// In libcurl 7.69 the generated TE header belongs to connectdata, so a new
+// easy handle can still inherit it through CURL_LOCK_DATA_CONNECT. Start a
+// real TCP connection for legacy and do not put that connection back in the
+// shared cache. DNS and TLS-session reuse remain available and TLS is verified.
+inline auto ConfigureLegacyConnection(CURL* handle) -> bool {
+    return curl_easy_setopt(handle, CURLOPT_FRESH_CONNECT, 1L) == CURLE_OK
+        && curl_easy_setopt(handle, CURLOPT_FORBID_REUSE, 1L) == CURLE_OK;
+}
+
 } // namespace sphaira::curl
