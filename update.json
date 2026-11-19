@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "app": "NinMagic Shop",
-  "version": "0.1.0",
-  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/66bd0df553b6aaa83d18b90b80e70af24315405b/releases/0.1.0/NinMagic-Shop.nro",
-  "bytes": 4457354,
-  "sha256": "350da82b5a9e917c27bafc324ab264a148fad24f6582e62d84385c816fa69fb2",
-  "notes": "Primera beta de NinMagic Shop: perfiles de servidor editables, búsqueda de juegos, catálogo por carpetas y consolas detectadas, carátulas de tu web, cola de instalación y actualización propia. Abre hbmenu en modo aplicación para instalar."
+  "version": "0.1.1",
+  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/0d398fdbb9d24ef967ed06892724a113ba18744c/releases/0.1.1/NinMagic-Shop.nro",
+  "bytes": 4606626,
+  "sha256": "b96a45905482de196938ed146c85738cb3ed4c1432ccb9545ca75169b46b0db6",
+  "notes": "Nueva interfaz de tres columnas con fondo azul oscuro, cian neón, violeta y amarillo; botones A/X cian, B rojo, Y amarillo y L/R/+ blancos. Edición visible de tiendas guardadas y conservación de la contraseña si no se modifica. Corregida la conexión con Ownfoil antiguo que devolvía una página web. Búsqueda, consolas, contenido del juego y cola accesibles desde la biblioteca."
 }
