@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "app": "NinMagic Shop",
-  "version": "0.1.4",
-  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/b380db8102170d52c49cccb5bc887a6fdeab8334/releases/0.1.4/NinMagic-Shop.nro",
-  "bytes": 4663970,
-  "sha256": "a646bf4acdf542779cbaeae8249900265a9aa999df4c06e2de3ec6605ffeb635",
-  "notes": "Desplázate con la cruceta o el stick para seguir pasando páginas. El buscador consulta la biblioteca y admite nombres con o sin acentos. Las carátulas cargan en segundo plano. La ficha muestra el nombre, el género, la descripción y el fondo cuando el proveedor los ofrece. Encontrarás «Actualizar app» en la columna izquierda."
+  "version": "0.1.5",
+  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/e1b65f9ffbb5adf3bc061275d056fe3ed7c0c8ee/releases/0.1.5/NinMagic-Shop.nro",
+  "bytes": 4685250,
+  "sha256": "5c82316ec8bdc1050b24bfce8dcb6f9645324d3336691557dadbb98c5cc24250",
+  "notes": "Busca dentro de la consola que tengas abierta. La colección NES se reconoce desde el catálogo. La ficha reutiliza los datos al abrirla y permite pedir la revisión mientras carga. Al volver a entrar se reutilizan las fichas verificadas en la microSD. Las descargas indican si falta el archivo en el servidor."
 }
