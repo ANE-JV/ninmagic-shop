@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "app": "NinMagic Shop",
-  "version": "0.1.5",
-  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/e1b65f9ffbb5adf3bc061275d056fe3ed7c0c8ee/releases/0.1.5/NinMagic-Shop.nro",
+  "version": "0.1.6",
+  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/bfa32f3730fe06e32b241e0cb1f685b9358c7cb9/releases/0.1.6/NinMagic-Shop.nro",
   "bytes": 4685250,
-  "sha256": "5c82316ec8bdc1050b24bfce8dcb6f9645324d3336691557dadbb98c5cc24250",
-  "notes": "Busca dentro de la consola que tengas abierta. La colección NES se reconoce desde el catálogo. La ficha reutiliza los datos al abrirla y permite pedir la revisión mientras carga. Al volver a entrar se reutilizan las fichas verificadas en la microSD. Las descargas indican si falta el archivo en el servidor."
+  "sha256": "b949974f94f5049394c89a514ec7f9fa0e4cdd2a6fe7a90d16ebcd71caf8818f",
+  "notes": "Corrige el cierre de la aplicación durante la primera conexión a la tienda."
 }
