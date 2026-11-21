@@ -43,7 +43,7 @@ inline auto Key(const File& file) -> std::string {
 struct CatalogCache {
     std::string url, user, pass;
     std::shared_ptr<const std::vector<File>> files;
-    bool legacy{};
+    bool legacy{}, legacy_headers{};
     auto Matches(const std::string& requested_url, const std::string& requested_user, const std::string& requested_pass) const -> bool {
         return files && url == requested_url && user == requested_user && pass == requested_pass;
     }
@@ -425,9 +425,17 @@ inline auto ParseArtwork(const char* bytes, size_t size, std::vector<Artwork>& o
             if (art.banner.empty()) art.banner = RealArtwork(Image(record, key));
         for (const auto key : {"platform", "console", "system"})
             if (art.platform.empty()) art.platform = PlatformMetadata(String(record, key));
-        // A known retail application in the server's library is evidence of
-        // Switch content. Custom forwarder IDs carry no original-console hint.
-        if (art.platform.empty() && art.kind != Kind::Unknown && art.id.starts_with("01")) art.platform = "Nintendo Switch";
+        if (art.platform.empty()) art.platform = PlatformFromTags(art.name);
+        if (art.platform.empty()) art.platform = PlatformFromTags(art.filename);
+        if (art.platform.empty()) art.platform = PlatformFromPath(art.filename);
+        // Classic Ownfoil also lists custom forwarders as BASE with 01 IDs.
+        // A missing TitleDB row and a placeholder are not platform evidence.
+        const auto database_id = String(record, "id");
+        const bool in_database = !database_id.empty() && Lower(database_id) == Lower(art.id);
+        const bool has_art = !art.icon.empty() || !art.banner.empty();
+        if (art.platform.empty() && art.kind != Kind::Unknown && art.id.starts_with("01")
+            && Lower(database_id).find("not found") == std::string::npos && (in_database || has_art))
+            art.platform = "Nintendo Switch";
         if (!art.id.empty() || !art.filename.empty()) out.push_back(std::move(art));
     };
     if (yyjson_is_arr(records)) {
@@ -512,9 +520,28 @@ inline auto JsonQuote(const std::string& text) -> std::string {
     }
     return out + '"';
 }
+// Recognize the dedicated Ownfoil HTML representation without accepting links
+// from the web dashboard, sign-in or a proxy error page as a shop directory.
+inline bool IsOwnfoilDirectory(std::string_view body) {
+    const auto whitespace = [&] { body.remove_prefix(std::min(body.find_first_not_of(" \r\n\t"), body.size())); };
+    const auto take = [&](std::string_view tag) {
+        whitespace();
+        if (!body.starts_with(tag)) return false;
+        body.remove_prefix(tag.size());
+        return true;
+    };
+    take("<!DOCTYPE html>");
+    take("<html>");
+    take("<body>");
+    if (!take("<table>")) return false;
+    whitespace();
+    return body.starts_with("<a ") || body.starts_with("</table>");
+}
+
 // Ownfoil's older Sphaira route is a list of hrefs. It can contain thousands of
 // subdirectories; expose those for lazy navigation rather than crawling a NAS.
-inline auto ParseHtml(const char* bytes, size_t size, std::vector<File>& out, std::string& error) -> bool {
+inline auto ParseHtml(const char* bytes, size_t size, std::vector<File>& out, std::string& error, bool* access_denied = nullptr) -> bool {
+    if (access_denied) *access_denied = false;
     const std::string text(bytes, size);
     const auto lower = Lower(text);
     std::string json = "{\"files\":[";
@@ -534,6 +561,7 @@ inline auto ParseHtml(const char* bytes, size_t size, std::vector<File>& out, st
         if (finish == std::string::npos || finish > end) continue;
         auto href = HtmlText(text.substr(begin + 1, finish - begin - 1));
         if (href.starts_with("00 - ERROR")) {
+            if (access_denied) *access_denied = true;
             error = "The server rejected the login or this account has no shop access";
             out.clear(); return false;
         }

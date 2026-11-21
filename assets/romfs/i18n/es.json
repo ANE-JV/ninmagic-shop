@@ -1383,5 +1383,11 @@
   "The server did not return a plain JSON shop index": "El servidor no devolvió un índice JSON de tienda compatible.",
   "The JSON index has no files array (encrypted indices are not supported)": "El índice JSON no contiene una lista files; los índices cifrados no son compatibles.",
   "The server rejected the login or this account has no shop access": "El servidor rechazó el acceso o esta cuenta no tiene permiso para la tienda.",
-  "The server returned a web page instead of a shop directory": "El servidor devolvió una página web en lugar de una carpeta de tienda."
+  "The server returned a web page instead of a shop directory": "El servidor devolvió una página web en lugar de una carpeta de tienda.",
+  "Package link unavailable (HTTP 404/410)": "Enlace al archivo no disponible (HTTP 404/410)",
+  "Download access denied (HTTP 401/403)": "Acceso a la descarga denegado (HTTP 401/403)",
+  "Package download interrupted": "Descarga del paquete interrumpida",
+  "Refresh the shop catalog. If it persists, check the file path in Ownfoil and rescan the library.": "Actualiza el catálogo. Si vuelve a ocurrir, revisa la ruta del archivo en Ownfoil y vuelve a escanear la biblioteca.",
+  "Check the shop profile and that this account can download the file.": "Revisa los datos de la tienda y el permiso de descarga de esta cuenta.",
+  "The server could not send the requested bytes. Check the connection and retry.": "El servidor no pudo enviar los datos solicitados. Comprueba la conexión y vuelve a intentarlo."
 }

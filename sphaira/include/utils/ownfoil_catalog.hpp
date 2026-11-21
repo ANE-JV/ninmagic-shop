@@ -1,12 +1,56 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "utils/ownfoil_index.hpp"
+#include <array>
 #include <unordered_set>
 
 namespace sphaira::ownfoil::index {
 struct ConsolidationStatus {
     std::size_t folders{}, mapped_folders{}, ambiguous_folders{}, unresolved_folders{};
 };
+
+// The NinMagic NES set uses its own forwarder IDs. These are not console
+// identifiers outside this collection. Its public catalogue identifies the
+// following three titles by both ID and name, including on private mirrors.
+template<class Rows, class Eligible>
+inline bool ApplyNinMagicCollection(Rows& files, std::string_view artwork_provider, Eligible eligible, bool previously_confirmed = false) {
+    if (artwork_provider.ends_with('/')) artwork_provider.remove_suffix(1);
+    if (artwork_provider != "https://ninmagic.com/juegos" && artwork_provider != "https://www.ninmagic.com/juegos") return false;
+
+    constexpr std::array<std::pair<std::string_view, std::string_view>, 3> landmarks{{
+        {"0557200000010000", "1942"},
+        {"0557200003870000", "Linus Spacehead's Cosmic Crusade"},
+        {"0557200007570000", "Zooming Secretary"},
+    }};
+    std::array<bool, landmarks.size()> present{};
+    for (const auto& file : files) {
+        if (!eligible(file) || (!file.platform.empty() && file.platform != "NES")) continue;
+        for (size_t i = 0; i < landmarks.size(); ++i) {
+            if (file.id == landmarks[i].first && file.name == landmarks[i].second) present[i] = true;
+        }
+    }
+    const bool known_shop = previously_confirmed || std::count(present.begin(), present.end(), true) >= 2;
+    for (auto& file : files) {
+        if (!file.platform.empty() || !eligible(file)) continue;
+        const std::string_view id = file.id;
+        if (id.size() != 16 || !id.starts_with("05572000") || !id.ends_with("0000")) continue;
+        const auto ordinal = id.substr(8, 4);
+        if (!std::all_of(ordinal.begin(), ordinal.end(), [](char c) { return HexDigit(c) >= 0; })
+            || !(HexDigit(ordinal.back()) & 1)) continue;
+        if (!known_shop && std::none_of(landmarks.begin(), landmarks.end(), [&](const auto& confirmed) {
+            return id == confirmed.first && file.name == confirmed.second;
+        })) continue;
+        file.platform = "NES";
+        file.platform_learned = true;
+    }
+    return known_shop;
+}
+
+inline void ApplyNinMagicPlatforms(std::vector<File>& files, std::string_view artwork_provider) {
+    ApplyNinMagicCollection(files, artwork_provider, [](const File& file) {
+        return !file.directory && (file.kind == Kind::Base || file.kind == Kind::Unknown);
+    });
+}
 
 // Convert a library's per-game directory into a game card only when the
 // server supplies one exact, unique BASE name and a real application identity.

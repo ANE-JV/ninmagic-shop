@@ -2928,6 +2928,10 @@ void App::DisplayHddOptions(bool left_side) {
 }
 
 void App::ShowEnableInstallPrompt() {
+    PromptInstallEnable({});
+}
+
+void App::PromptInstallEnable(std::function<void()> on_enabled) {
     if constexpr (!platform::SupportsInstall) {
         App::Push<ui::OptionBox>("Installing is not supported on Switch 2"_i18n, "OK"_i18n);
         return;
@@ -2940,7 +2944,7 @@ void App::ShowEnableInstallPrompt() {
 
     App::Push<ui::OptionBox>(
         "Installing is disabled, enable now?"_i18n,
-        "Back"_i18n, "Enable"_i18n, 0, [](auto op_index){
+        "Back"_i18n, "Enable"_i18n, 0, [on_enabled = std::move(on_enabled)](auto op_index){
             if (op_index && *op_index) {
                 // get the install option based on sysmmc/emummc.
                 auto& option = IsEmummc() ? g_app->m_install_emummc : g_app->m_install_sysmmc;
@@ -2949,7 +2953,8 @@ void App::ShowEnableInstallPrompt() {
                 static bool enable{};
                 enable = true;
 
-                return ShowEnableInstallPromptOption(option, enable);
+                ShowEnableInstallPromptOption(option, enable);
+                if (on_enabled) on_enabled();
             }
         }
     );

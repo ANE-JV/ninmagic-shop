@@ -95,7 +95,7 @@ Result Http::Start(s64 off) {
 
     // open ended: the transfer only stops early when a read goes elsewhere.
     char range[32];
-    std::snprintf(range, sizeof(range), "%ld-", off);
+    std::snprintf(range, sizeof(range), "%lld-", static_cast<long long>(off));
     curl_easy_setopt(m_curl, CURLOPT_RANGE, range);
 
     m_requested_offset = off;
@@ -211,7 +211,10 @@ Result Http::Read(void* buf, s64 off, s64 size, u64* bytes_read) {
         log_write("[HTTP] read %lu of %ld at %ld, http code: %ld error: %d\n", *bytes_read, size, off, code, m_transfer->error);
         m_transfer.reset();
 
-        // asking again won't change an error status (credentials, a token gone).
+        // A catalog entry may survive after a file moves on the server. Keep
+        // a missing package distinct from rejected credentials or lost bytes.
+        if (code == 404 || code == 410) R_THROW(Result_YatiHttpFileNotFound);
+        if (code == 401 || code == 403) R_THROW(Result_YatiHttpAccessDenied);
         R_UNLESS(code < 400 && !m_protocol_error, Result_YatiHttpReadFailed);
         const auto now = armTicksToNs(armGetSystemTick());
         if (read || !stalled_since) {

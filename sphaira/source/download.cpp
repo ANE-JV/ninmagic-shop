@@ -55,6 +55,7 @@ struct UploadStruct {
 
 struct DataStruct {
     std::vector<u8> data;
+    size_t memory_limit{std::numeric_limits<size_t>::max()};
     s64 offset{};
     fs::File f{};
     s64 file_offset{};
@@ -499,11 +500,16 @@ auto WriteMemoryCallback(void *contents, size_t size, size_t num_files, void *us
     }
 
     auto data_struct = static_cast<DataStruct*>(userp);
+    const auto offset = static_cast<size_t>(data_struct->offset);
+    const auto limit = std::min(data_struct->memory_limit, data_struct->data.max_size());
+    if (!size || !num_files || offset > limit || num_files > (limit - offset) / size) return 0;
     const auto realsize = size * num_files;
 
-    // give it more memory
-    if (data_struct->data.capacity() < data_struct->offset + realsize) {
-        data_struct->data.reserve(data_struct->data.capacity() + CHUNK_SIZE);
+    // libcurl supplies decoded bytes here, including for compressed responses.
+    const auto capacity = data_struct->data.capacity();
+    if (capacity < offset + realsize) {
+        const auto next = capacity + std::min<size_t>(CHUNK_SIZE, limit - capacity);
+        data_struct->data.reserve(std::max(next, offset + realsize));
     }
 
     data_struct->data.resize(data_struct->offset + realsize);
@@ -774,7 +780,8 @@ auto DownloadInternal(CURL* curl, const Api& e) -> ApiResult {
     }
 
     // reserve the first chunk
-    chunk.data.reserve(CHUNK_SIZE);
+    chunk.memory_limit = e.GetMemoryLimit();
+    chunk.data.reserve(std::min<size_t>(CHUNK_SIZE, chunk.memory_limit));
 
     curl_easy_reset(curl);
     if (!SetCommonCurlOptions(curl, e)) return {};
@@ -914,7 +921,8 @@ auto UploadInternal(CURL* curl, const Api& e) -> ApiResult {
     }
 
     // reserve the first chunk
-    chunk_out.data.reserve(CHUNK_SIZE);
+    chunk_out.memory_limit = e.GetMemoryLimit();
+    chunk_out.data.reserve(std::min<size_t>(CHUNK_SIZE, chunk_out.memory_limit));
 
     curl_easy_reset(curl);
     if (!SetCommonCurlOptions(curl, e)) return {};

@@ -3,6 +3,7 @@
 import argparse
 import base64
 import ctypes.util
+import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -35,6 +36,48 @@ class OwnfoilFixture(BaseHTTPRequestHandler):
 
     def do_GET(self):
         expected = "Basic " + base64.b64encode(b"wire-user:wire-pass").decode()
+        if self.path == "/compressed-metadata":
+            payload = gzip.compress(b"x" * 8192)
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Content-Encoding", "gzip")
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        if self.path.startswith("/wire/"):
+            if self.headers.get("Authorization") != expected:
+                self.send_error(401)
+            elif self.path == "/wire/dead-alias":
+                self.send_error(404)
+            elif self.path == "/wire/gone":
+                self.send_error(410)
+            elif self.path == "/wire/denied":
+                self.send_error(403)
+            elif self.path == "/wire/modern" and not self.headers.get("User-Agent", "").startswith("Sphaira/"):
+                self.send_error(404)
+            elif self.path == "/wire/legacy" and self.headers.get("User-Agent"):
+                self.send_error(404)
+            else:
+                data = b"0123456789abcdef"
+                # Only the final 16 bytes are materialized for the large-file
+                # fixture, so a 64-bit seek is exercised without a large transfer.
+                first = (1 << 32) if self.path == "/wire/large" else 0
+                total = first + len(data)
+                requested = self.headers.get("Range", "")
+                if (not requested.startswith("bytes=") or not requested.endswith("-")
+                        or not requested[6:-1].isdigit() or not first <= int(requested[6:-1]) < total):
+                    self.send_error(416)
+                    return
+                offset = int(requested[6:-1])
+                reported = 0 if self.path == "/wire/wrong-range" else offset
+                self.send_response(206)
+                self.send_header("Content-Type", "application/octet-stream")
+                self.send_header("Content-Range", f"bytes {reported}-{total-1}/{total}")
+                self.send_header("Content-Length", str(total-offset))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(data[offset-first:])
+            return
         headers = {name.lower() for name in self.headers}
         allowed = {"host", "accept", "accept-encoding", "authorization"}
         index = (headers == allowed and self.headers.get("Authorization") == expected
@@ -79,18 +122,41 @@ def main():
     start = source.index("auto SetCommonCurlOptions(")
     end = source.index("\nauto DownloadInternal(", start)
     (args.output / "production_curl_options.inc").write_text(source[start:end], encoding="utf-8")
-    executable = args.output / ("curl_legacy_wire.exe" if sys.platform == "win32" else "curl_legacy_wire")
-    command = [args.cxx, "-std=c++20", "-O1", "-Wno-deprecated-declarations", "-I", compiler_path(args.cxx, args.curl_include), "-I", compiler_path(args.cxx, ROOT / "sphaira/include"), "-I", compiler_path(args.cxx, args.output), compiler_path(args.cxx, ROOT / "tools/tests/curl_legacy_wire.cpp"), library, "-o", compiler_path(args.cxx, executable)]
-    if args.curl_static:
-        command.insert(1, "-DCURL_STATICLIB")
-    command += [compiler_path(args.cxx, item) for item in args.link_library] + args.link_arg
-    subprocess.run(command, check=True)
+    start = source.index("auto WriteMemoryCallback(")
+    end = source.index("\nauto WriteFileCallback(", start)
+    (args.output / "production_memory_write.inc").write_text(source[start:end], encoding="utf-8")
+    # Only hardware/platform dependencies are replaced. Build the reader from
+    # the source also compiled for the console.
+    fragments = []
+    for file in ("sphaira/include/yati/source/base.hpp", "sphaira/include/yati/source/http.hpp",
+                 "sphaira/source/yati/source/http.cpp"):
+        source = (ROOT / file).read_text(encoding="utf-8")
+        fragments.append("\n".join(line for line in source.splitlines()
+                                   if not line.startswith(("#include ", "#pragma once"))))
+    (args.output / "production_yati_http.inc").write_text("\n".join(fragments), encoding="utf-8")
+    def compile_wire(name):
+        out = args.output / (name + (".exe" if sys.platform == "win32" else ""))
+        command = [args.cxx, "-std=c++20", "-O1", "-Wno-deprecated-declarations"]
+        if args.curl_static:
+            command.append("-DCURL_STATICLIB")
+        for directory in (args.curl_include, ROOT / "sphaira/include", args.output):
+            command += ["-I", compiler_path(args.cxx, directory)]
+        command += [compiler_path(args.cxx, ROOT / f"tools/tests/{name}.cpp"),
+                    library, "-o", compiler_path(args.cxx, out)]
+        command += [compiler_path(args.cxx, item) for item in args.link_library] + args.link_arg
+        subprocess.run(command, check=True)
+        return str(out.resolve())
+
+    executable = compile_wire("curl_legacy_wire")
+    yati = compile_wire("yati_http_wire")
     server = ThreadingHTTPServer(("127.0.0.1", 0), OwnfoilFixture)
     server.daemon_threads = True
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     try:
-        result = subprocess.run([str(executable.resolve()), f"http://127.0.0.1:{server.server_port}/"], capture_output=True, text=True, check=True)
+        base = f"http://127.0.0.1:{server.server_port}/"
+        result = subprocess.run([executable, base], capture_output=True, text=True, check=True)
+        subprocess.run([yati, base], check=True, timeout=20)
     finally:
         server.shutdown()
         server.server_close()

@@ -705,6 +705,8 @@ enum class SphairaResult : Result {
     // not available on this platform, see platform.hpp.
     PlatformUnsupported,
     AppstoreNoReleaseAsset,
+    YatiHttpFileNotFound,
+    YatiHttpAccessDenied,
 };
 
 #define MAKE_SPHAIRA_RESULT_ENUM(x) Result_##x =  MAKERESULT(Module_Sphaira, (Result)SphairaResult::x)
@@ -877,6 +879,8 @@ enum : Result {
     MAKE_SPHAIRA_RESULT_ENUM(GcNoInitialData),
     MAKE_SPHAIRA_RESULT_ENUM(PlatformUnsupported),
     MAKE_SPHAIRA_RESULT_ENUM(AppstoreNoReleaseAsset),
+    MAKE_SPHAIRA_RESULT_ENUM(YatiHttpFileNotFound),
+    MAKE_SPHAIRA_RESULT_ENUM(YatiHttpAccessDenied),
 };
 
 #undef MAKE_SPHAIRA_RESULT_ENUM

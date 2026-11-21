@@ -37,12 +37,8 @@ struct InstalledVersion {
 
 // reads the game's own control data for its version string, so it costs a trip
 // to storage on top of the ns query. call from a worker.
-auto InstalledVersionOf(const std::string& title_id) -> InstalledVersion;
+auto InstalledVersionOf(const std::string& title_id, std::vector<std::string>& dlc_ids) -> InstalledVersion;
 
 // the console only answers for an add-on through the game it belongs to.
 auto HasDlc(const std::string& title_id, const std::string& dlc_id) -> bool;
-
-// one query for every row on a game's page. call from a worker.
-auto InstalledDlcIds(const std::string& title_id) -> std::vector<std::string>;
-
 } // namespace sphaira::ownfoil::installed

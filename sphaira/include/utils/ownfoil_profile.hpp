@@ -14,7 +14,7 @@ struct Config {
     std::string metadata_url, remote_address, user, pass;
     Backend backend{Backend::Auto};
     std::vector<std::string> favorites;
-    bool revalidate_artwork{}, legacy_html{}, json_index{};
+    bool revalidate_artwork{}, legacy_html{}, legacy_headers{}, json_index{};
     std::string resolved_url;
 };
 using Configs = std::vector<Config>;
@@ -43,6 +43,7 @@ inline auto Apply(const Config& original, const Edit& edit) -> Config {
         next.resolved_url.clear();
         next.server_uid.clear();
         next.legacy_html = false;
+        next.legacy_headers = false;
         next.json_index = false;
     }
     if (connection_changed || next.metadata_url != original.metadata_url || next.artwork_search_url != original.artwork_search_url)

@@ -50,6 +50,7 @@ struct DetailPanelState {
     bool ready{};
     std::array<bool, 3> selected{};
     std::array<bool, 3> available{};
+    const char* primary_label{"Instalar paquete"};
     bool primary_enabled{};
     bool queue_enabled{};
     bool focused{};
@@ -134,7 +135,7 @@ inline void DrawDetailPanel(NVGcontext* vg, Rect bounds, const DetailPanelState&
             state.available[row] ? White : Muted, labels[row]);
     }
     DetailText(vg, area(351.f, 17.f), 12.f * scale, Muted, state.note);
-    Button(vg, DetailActionBounds(bounds, 3), "Instalar paquete", state.focused && state.action == 3, state.primary_enabled,
+    Button(vg, DetailActionBounds(bounds, 3), state.primary_label, state.focused && state.action == 3, state.primary_enabled,
         Icon::Download, true, 22.f * scale);
     Button(vg, DetailActionBounds(bounds, 4), "Añadir a la cola", state.focused && state.action == 4, false,
         Icon::Plus, true, 20.f * scale);

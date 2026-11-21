@@ -1,4 +1,4 @@
-# NinMagic Shop 0.1.4 — beta
+# NinMagic Shop 0.1.5 — beta
 
 Tienda para Nintendo Switch con Atmosphère. Acceso a tu servidor, catálogo con carátulas, búsqueda, favoritos y cola de instalación. Proyecto separado de las demás aplicaciones NinMagic.
 
@@ -6,7 +6,7 @@ Deriva de [Sphaira 1.1.1](https://github.com/NaGaa95/sphaira), cuyo cliente Ownf
 
 ## Instalación
 
-Descarga [NinMagic-Shop-0.1.4.zip](https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/main/releases/0.1.4/NinMagic-Shop-0.1.4.zip) y extráelo en la raíz de la microSD. La aplicación queda en:
+Descarga [NinMagic-Shop-0.1.5.zip](https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/main/releases/0.1.5/NinMagic-Shop-0.1.5.zip) y extráelo en la raíz de la microSD. La aplicación queda en:
 
 ```
 sdmc:/switch/NinMagicShop/NinMagic-Shop.nro
@@ -37,7 +37,7 @@ Se verifica el certificado y el nombre del servidor HTTPS. No se convierte autom
 | --- | --- |
 | A | Abrir una carpeta o la ficha del juego seleccionado. |
 | B | Volver; en listados por carpetas, subir a la carpeta anterior. |
-| X | Buscar juegos por nombre o una parte del nombre. |
+| X | Buscar por nombre o ID dentro de la consola o carpeta abierta. |
 | Y | Abrir la cola; en la pantalla de cuentas, editar la tienda seleccionada. |
 | − | Opciones del catálogo y del perfil. |
 | + | Menú Shop: cuenta, cola, instalados, ajustes, actualizar y salir. |
@@ -85,6 +85,14 @@ La descarga se fija a un commit de este repositorio y comprueba tamaño, SHA-256
 - `config/NinMagicShop/`: perfiles, preferencias y estado del actualizador.
 
 Los perfiles guardados contienen las credenciales en la microSD. No compartas esa carpeta como parte de un pack público. Los ZIP publicados contienen la aplicación y sus licencias, sin perfiles personales ni juegos.
+
+## Cambios de 0.1.5
+
+- El buscador conserva la consola o carpeta abierta. Para buscar «mario» en toda la biblioteca, elige **Secciones → Todas las consolas** antes de escribir.
+- La carpeta **NES** reúne la colección de NinMagic desde el índice completo del servidor, aunque todavía no hayas abierto sus carátulas. Puedes recorrer todas sus páginas.
+- Pulsa **A** sobre la carátula para abrir la ficha y elige **Instalar paquete**. La ficha reutiliza la consulta iniciada en la biblioteca. Si los archivos todavía se están comprobando, la revisión se abre en cuanto estén listos. Tú confirmas el contenido antes de instalarlo.
+- A partir de la primera carga en esta versión, la app puede reutilizar las fichas guardadas en la microSD. Al volver a entrar verifica el acceso de la cuenta y lee el índice del servidor para detectar juegos añadidos. **Secciones → Actualizar catálogo** fuerza una consulta nueva.
+- La tienda reconoce los listados HTML de Ownfoil con las cabeceras de cada versión. Los errores de descarga distinguen un enlace que el servidor devuelve como ausente, los permisos de la cuenta y las interrupciones de lectura.
 
 ## Cambios de 0.1.4
 

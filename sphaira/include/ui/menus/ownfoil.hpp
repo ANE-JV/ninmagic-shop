@@ -96,6 +96,7 @@ private:
     void ShowCategories();
     // `index` is the Search category's own place in CATEGORIES.
     void ShowSearch(s64 index);
+    auto SearchScope() const -> std::string;
     // the server name and the category on screen, drawn above the grid.
     void SetCatalogTitle();
     void OnViewChange();
@@ -129,7 +130,7 @@ private:
     void SelectPlatform(const std::string& platform);
     void ShowServerFolders();
     void ActivateSidebar();
-    void UpdatePreview();
+    void UpdatePreview(bool immediate = false);
     void RetirePreview();
     auto FindAction(Button button) const -> std::optional<Action>;
     void RestoreAction(Button button, std::optional<Action>& prev);

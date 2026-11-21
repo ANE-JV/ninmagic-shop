@@ -16,6 +16,7 @@ struct CatalogPanelState {
     std::vector<std::string> platforms;
     std::vector<CatalogCard> cards;
     std::string platform, heading, location, search, storage, page, empty_text;
+    std::string search_hint{"Buscar juegos..."};
     size_t sidebar_index{}, sidebar_offset{};
     bool sidebar_focused{}, detail_focused{}, loading{}, can_update{true};
 };
@@ -74,7 +75,7 @@ inline void DrawCatalogPanel(NVGcontext* vg, const CatalogPanelState& state) {
     nvgSave(vg);nvgIntersectScissor(vg,267,145,599,24);Text(vg,268,157,16,Muted,state.location.c_str());nvgRestore(vg);
     Panel(vg,layout::Search,Border);DrawIcon(vg,Icon::Search,258,186,23);
     nvgSave(vg);nvgIntersectScissor(vg,290,181,400,32);
-    Text(vg,292,198,17,Muted,state.search.empty()?"Buscar juegos...":state.search.c_str());nvgRestore(vg);
+    Text(vg,292,198,17,Muted,state.search.empty()?state.search_hint.c_str():state.search.c_str());nvgRestore(vg);
     Button(vg,layout::Sections,"Secciones",false,false,Icon::Folder,true,16);
 
     if(state.cards.empty()) {

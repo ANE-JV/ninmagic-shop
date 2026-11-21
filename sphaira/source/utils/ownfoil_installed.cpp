@@ -82,7 +82,7 @@ auto TitleIds(const Inventory& inv) -> std::vector<std::string> {
     return out;
 }
 
-auto InstalledVersionOf(const std::string& title_id) -> InstalledVersion {
+auto InstalledVersionOf(const std::string& title_id, std::vector<std::string>& dlc_ids) -> InstalledVersion {
     InstalledVersion out{};
 
     // opened for the query, as Scan does.
@@ -92,9 +92,16 @@ auto InstalledVersionOf(const std::string& title_id) -> InstalledVersion {
     ON_SCOPE_EXIT(ns::Exit());
 
     title::MetaEntries metas;
-    if (R_FAILED(title::GetMetaEntries(ParseId(title_id), metas, title::ContentFlag_Nacp)) || metas.empty()) {
-        return out;
-    }
+    dlc_ids.clear();
+    if (R_FAILED(title::GetMetaEntries(ParseId(title_id), metas, title::ContentFlag_Nacp | title::ContentFlag_AddOnContent))) return out;
+    // A single NS enumeration yields both the installed version and the DLC
+    // selection. Only application/patch records can provide its display version.
+    std::erase_if(metas, [&](const auto& meta) {
+        if (meta.meta_type != NcmContentMetaType_AddOnContent) return false;
+        dlc_ids.emplace_back(FormatId(meta.application_id));
+        return true;
+    });
+    if (metas.empty()) return out;
 
     // the newest installed - an update, when there is one - is the version the
     // game reports itself as.
@@ -146,25 +153,6 @@ auto HasDlc(const std::string& title_id, const std::string& dlc_id) -> bool {
     return std::any_of(metas.begin(), metas.end(), [id](const auto& meta) {
         return meta.application_id == id;
     });
-}
-
-auto InstalledDlcIds(const std::string& title_id) -> std::vector<std::string> {
-    std::vector<std::string> out;
-
-    // opened for the query, as Scan does.
-    if (R_FAILED(ns::Initialize())) {
-        return out;
-    }
-    ON_SCOPE_EXIT(ns::Exit());
-
-    title::MetaEntries metas;
-    if (R_SUCCEEDED(title::GetMetaEntries(ParseId(title_id), metas, title::ContentFlag_AddOnContent))) {
-        for (const auto& meta : metas) {
-            out.emplace_back(FormatId(meta.application_id));
-        }
-    }
-
-    return out;
 }
 
 } // namespace sphaira::ownfoil::installed

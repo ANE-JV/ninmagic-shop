@@ -152,6 +152,7 @@ public:
     static void ShowEnableInstallPromptOption(option::OptionBool& option, bool& enable);
     // displays an option box to enable installing, shows warning.
     static void ShowEnableInstallPrompt();
+    static void PromptInstallEnable(std::function<void()> on_enabled);
 
     void Draw();
     void Update();

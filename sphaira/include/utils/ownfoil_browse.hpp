@@ -80,8 +80,8 @@ public:
             if (!query.consolidated && !file.source_folder.empty()) continue;
             if (!query.platform.empty()) {
                 const auto platform = PlatformOf(file);
-                const auto matches = query.platform == "__unknown__" ? platform.empty() : platform == query.platform;
-                if (!matches && (query.consolidated || !file.directory || !platform.empty())) continue;
+                if (!api::MatchesPlatform(query.platform, platform) &&
+                    (query.category == Category::Search || query.consolidated || !file.directory || !platform.empty())) continue;
             }
             const auto base = file.kind == Kind::Base || file.kind == Kind::Unknown;
             bool include{};

@@ -23,7 +23,7 @@ auto GetModule(Result rc) -> const char* {
 
     return nullptr;
 }
-auto GetCodeMessage(Result rc) -> const char* {
+auto GetCodeMessage(Result rc) -> std::string {
     switch (rc) {
         case SvcError_TimedOut: return "SvcError_TimedOut";
         case SvcError_Cancelled: return "SvcError_Cancelled";
@@ -185,7 +185,9 @@ auto GetCodeMessage(Result rc) -> const char* {
         case Result_MspInvalidEntry: return "SphairaError_MspInvalidEntry";
         case Result_MspDuplicateEntry: return "SphairaError_MspDuplicateEntry";
         case Result_MspNoPayload: return "SphairaError_MspNoPayload";
-        case Result_YatiHttpReadFailed: return "SphairaError_YatiHttpReadFailed";
+        case Result_YatiHttpFileNotFound: return "Package link unavailable (HTTP 404/410)"_i18n;
+        case Result_YatiHttpAccessDenied: return "Download access denied (HTTP 401/403)"_i18n;
+        case Result_YatiHttpReadFailed: return "Package download interrupted"_i18n;
         case Result_UsbBadPacketCrc: return "SphairaError_UsbBadPacketCrc";
         case Result_UsbBadDataCrc: return "SphairaError_UsbBadDataCrc";
         case Result_UsbRemoteError: return "SphairaError_UsbRemoteError";
@@ -212,6 +214,13 @@ auto GetCodeHint(Result rc) -> std::string {
         case Result_KeyMissingMasterKey:
         case Result_KeyFailedDecyptETicketDeviceKey:
             return "Your keys are missing or outdated. Dump prod.keys again with the latest Lockpick_RCM."_i18n;
+
+        case Result_YatiHttpFileNotFound:
+            return "Refresh the shop catalog. If it persists, check the file path in Ownfoil and rescan the library."_i18n;
+        case Result_YatiHttpAccessDenied:
+            return "Check the shop profile and that this account can download the file."_i18n;
+        case Result_YatiHttpReadFailed:
+            return "The server could not send the requested bytes. Check the connection and retry."_i18n;
 
         case Result_YatiInvalidNczZstdError:
             return "Failed to decompress the NCZ. Try installing from the SD card or use the USB install script."_i18n;
@@ -288,7 +297,7 @@ auto ErrorBox::Draw(NVGcontext* vg, Theme* theme) -> void {
         gfx::drawTextBox(vg, m_pos.x + 35, 340, 20, m_pos.w - 70, theme->GetColour(ThemeEntryID_TEXT_SELECTED), m_hint.c_str(), NVG_ALIGN_CENTER | NVG_ALIGN_TOP);
     }
     gfx::drawTextArgs(vg, center_x, has_hint ? 395 : 380, 20, NVG_ALIGN_CENTER | NVG_ALIGN_TOP, theme->GetColour(ThemeEntryID_TEXT_INFO), "If this message appears repeatedly, please open an issue."_i18n.c_str());
-    gfx::drawTextArgs(vg, center_x, has_hint ? 425 : 415, 20, NVG_ALIGN_CENTER | NVG_ALIGN_TOP, theme->GetColour(ThemeEntryID_TEXT_INFO), "https://github.com/ITotalJustice/sphaira/issues");
+    gfx::drawTextArgs(vg, center_x, has_hint ? 425 : 415, 20, NVG_ALIGN_CENTER | NVG_ALIGN_TOP, theme->GetColour(ThemeEntryID_TEXT_INFO), "https://github.com/ANE-JV/ninmagic-shop/issues");
     gfx::drawRectOutline(vg, theme, 4.f, box);
     gfx::drawTextArgs(vg, center_x, box.y + box.h/2, 23, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE, theme->GetColour(ThemeEntryID_TEXT_SELECTED), "OK"_i18n.c_str());
 }

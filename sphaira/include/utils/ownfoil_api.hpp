@@ -36,7 +36,7 @@ struct ServerInfo {
 struct ConnectResult {
     bool success{};
     bool json_index{};
-    bool legacy_html{};
+    bool legacy_html{}, legacy_headers{};
     bool used_remote{}; // false = connected via local_address.
     bool reached{}; // the server answered, even if it answered with an error.
     bool refused{}; // the server itself turned the request down: bad credentials, no access.

@@ -4,9 +4,11 @@ Cada perfil guarda nombre, URL, puerto/ruta, URL alternativa, usuario y contrase
 
 La conexión automática prueba la API actual de Ownfoil, un índice JSON abierto y las carpetas HTML de Ownfoil clásico. HTTPS siempre verifica certificados. HTTP requiere escribir expresamente `http://`; no existe reintento automático de HTTPS por HTTP.
 
-`X` abre el buscador por nombre parcial o ID. La API actual busca en todo su catálogo; el modo clásico busca en la carpeta abierta y el índice JSON busca en ese índice. La pantalla indica el ámbito. `Y` abre consolas, carpetas y filtros. `B` sube una carpeta o vuelve a los perfiles desde la raíz. `-` abre opciones. En opciones se pueden añadir/quitar favoritos del juego; una actualización o DLC guarda el ID de su juego conocido.
+Pulsa **X** para buscar por nombre o ID dentro de la consola seleccionada. En la vista de carpetas la búsqueda se limita a la carpeta abierta. Para buscar en toda la biblioteca elige **Todas las consolas** en **Secciones**. **Y** abre la cola, **B** vuelve y **−** abre las opciones del catálogo y los favoritos.
 
 El tipo de archivo NSP/NSZ/XCI/XCZ no identifica su consola original. La clasificación se toma de `platform`, `console` o `system`, de etiquetas explícitas como `[GBA]` o `[SNES]`, o de un componente completo de carpeta reconocido (por ejemplo `/PS1/`, `/Super Nintendo/`). Si falta, se muestra «Sin clasificar». Los IDs personalizados `05...` se reconocen para buscar metadatos, pero no se les inventa una relación de base/actualización/DLC por su sufijo. Un paquete sin relación explícita conserva su ficha y su instalación independientes.
+
+Con el proveedor de imágenes de NinMagic, el cliente reconoce su colección NES al encontrar pares de identificador y título que la propia colección publica. La carpeta reúne los paquetes base de ese conjunto que aparecen en la tienda. Los datos de plataforma explícitos de cada título tienen prioridad. En GraphQL se agrupan las identidades por consola y sólo se piden las fichas completas de la página abierta.
 
 Una ficha de juego con relaciones conocidas selecciona de forma predeterminada la base necesaria, la última actualización disponible y todos los DLC que falten. No se busca la relación por parecido del nombre. En un listado clásico estas relaciones se resuelven con los archivos presentes en la carpeta; un manifiesto puede enlazar archivos de otras rutas. No se rastrean miles de carpetas automáticamente.
 

@@ -1,5 +1,6 @@
 #include "utils/ownfoil_api.hpp"
 #include "utils/ownfoil_index.hpp"
+#include "utils/ownfoil_snapshot.hpp"
 #include "utils/ownfoil_diagnostic.hpp"
 #include "utils/ownfoil_catalog.hpp"
 #include "utils/ownfoil_browse.hpp"
@@ -21,6 +22,7 @@
 #include <cstdlib>
 #include <utility>
 #include <chrono>
+#include <atomic>
 #include <cstdint>
 
 namespace sphaira::ownfoil::api {
@@ -312,6 +314,47 @@ struct ArtworkCache {
 std::mutex g_artwork_mutex;
 ArtworkCache g_artwork_cache;
 
+constexpr auto CatalogDirectory = "/switch/NinMagicShop/cache/ownfoil/catalog";
+std::atomic<std::uint64_t> g_catalog_generation{}, g_catalog_stage{};
+
+auto Digest(std::string_view bytes) -> snapshot::Digest {
+    snapshot::Digest value{};
+    sha256CalculateHash(value.data(), bytes.data(), bytes.size());
+    return value;
+}
+
+auto CatalogSnapshotPath(std::string root, const Config& config) -> std::string {
+    if (!root.ends_with('/')) root += '/';
+    std::string identity;
+    for (auto field : std::array<std::string_view, 6>{config.uid, root, config.user, config.pass, config.metadata_url, config.artwork_search_url})
+        snapshot::Put(identity, field);
+    snapshot::Put(identity, std::to_string(static_cast<int>(config.backend)));
+    const auto key = Digest(identity);
+    static constexpr char hex[] = "0123456789abcdef";
+    std::string path = CatalogDirectory;
+    path.push_back('/');
+    for (auto byte : key) { path += hex[byte >> 4]; path += hex[byte & 15]; }
+    return path + ".catalog";
+}
+
+auto HeaderValue(const curl::Header& headers, const char* key) -> std::string {
+    const auto found = headers.Find(key);
+    return found == headers.m_map.end() ? std::string{} : found->second;
+}
+
+auto Validators(const curl::Header& headers) -> snapshot::Digest {
+    std::string combined;
+    snapshot::Put(combined, HeaderValue(headers, "ETag"));
+    snapshot::Put(combined, HeaderValue(headers, "Last-Modified"));
+    return Digest(combined);
+}
+
+auto Cacheable(const curl::Header& headers) -> bool {
+    const auto control = index::Lower(HeaderValue(headers, "Cache-Control"));
+    return control.find("no-store") == control.npos;
+}
+
+
 auto FormValue(const std::string& value) -> std::string {
     std::string encoded;
     constexpr char HEX[] = "0123456789ABCDEF";
@@ -327,7 +370,7 @@ auto FormValue(const std::string& value) -> std::string {
 // existing /login session. Reuse the saved account; create no users or web data.
 // A custom public JSON endpoint may be on another origin, which gets no login.
 auto FetchWebArtwork(const std::string& directory, const Config& config, std::stop_token token,
-    bool refresh, std::shared_ptr<const ArtworkSnapshot>& records, const ConnectionDiagnostic* diagnostic = nullptr) -> bool {
+    bool refresh, std::string_view index_body, std::shared_ptr<const ArtworkSnapshot>& records, const ConnectionDiagnostic* diagnostic = nullptr) -> bool {
     auto root = config.resolved_url.empty() ? directory : config.resolved_url;
     if (!root.ends_with('/')) root += '/';
     auto endpoint = config.metadata_url.empty() ? ResolveUrl(root, "api/titles") : config.metadata_url;
@@ -344,50 +387,115 @@ auto FetchWebArtwork(const std::string& directory, const Config& config, std::st
     constexpr s64 LIMIT = 32 * 1024 * 1024;
     const auto bounded = [](s64 total, s64 now, s64, s64) { return total <= LIMIT && now <= LIMIT; };
     const auto local = IsSameOrigin(root, endpoint);
-    const auto request = [&](const std::string& cookie) {
+    const auto generation = g_catalog_generation.load();
+    const bool root_page = directory == root || directory + '/' == root || diagnostic;
+    const auto path = root_page && !config.uid.empty() && snapshot::SafeUrl(root) && snapshot::SafeUrl(endpoint)
+        ? CatalogSnapshotPath(root, config) : std::string{};
+    const auto index_digest = path.empty() ? snapshot::Digest{} : Digest(index_body);
+    const auto now = std::time(nullptr);
+    snapshot::Header saved{};
+    std::string candidate = path;
+    bool warm = !path.empty() && snapshot::Inspect(candidate, index_digest, now, saved);
+    if (!warm && !path.empty()) {
+        candidate = path + ".bak";
+        warm = snapshot::Inspect(candidate, index_digest, now, saved);
+    }
+    const auto request = [&](const std::string& cookie, bool check_only) {
         curl::Header headers;
         headers.m_map.emplace("Accept", "application/json");
         if (!cookie.empty()) headers.m_map.emplace("Cookie", cookie);
         auto result = curl::Api().ToMemory(curl::Url{endpoint}, std::move(headers),
             curl::UserPass{local ? config.user : "", local ? config.pass : ""}, curl::PreemptiveAuth{local},
-            curl::Flags{static_cast<u32>(curl::Flag_KeepErrorBody | curl::Flag_NoRedirect | (diagnostic ? curl::Flag_ConnectionDiagnostic : 0))}, curl::StopToken{token}, curl::OnProgress{bounded});
-        if (diagnostic) diagnostic->Response(cookie.empty() ? "artwork-get" : "artwork-session-get", endpoint, result);
+            curl::Flags{static_cast<u32>(curl::Flag_KeepErrorBody | curl::Flag_NoRedirect | (check_only ? curl::Flag_NoBody : 0) | (diagnostic ? curl::Flag_ConnectionDiagnostic : 0))}, curl::StopToken{token}, curl::MemoryLimit{LIMIT}, curl::OnProgress{bounded});
+        if (diagnostic) diagnostic->Response(check_only ? "artwork-validate" : cookie.empty() ? "artwork-get" : "artwork-session-get", endpoint, result);
         return result;
     };
-    auto result = request({});
-    if (token.stop_requested()) return false;
-    if (local && config.metadata_url.empty() && result.code == 302 && (!config.user.empty() || !config.pass.empty())) {
+    std::string cookie;
+    const bool can_login = local && config.metadata_url.empty() && (!config.user.empty() || !config.pass.empty());
+    const auto login_session = [&]() {
         const auto login_url = ResolveUrl(root, "login");
         const auto fields = "user=" + FormValue(config.user) + "&password=" + FormValue(config.pass);
         const auto login = curl::Api().ToMemory(curl::Url{login_url}, curl::Fields{fields},
             curl::Header{{{"Content-Type", "application/x-www-form-urlencoded"}}},
-            curl::Flags{static_cast<u32>(curl::Flag_KeepErrorBody | curl::Flag_NoRedirect | (diagnostic ? curl::Flag_ConnectionDiagnostic : 0))}, curl::StopToken{token}, curl::OnProgress{bounded});
+            curl::Flags{static_cast<u32>(curl::Flag_KeepErrorBody | curl::Flag_NoRedirect | (diagnostic ? curl::Flag_ConnectionDiagnostic : 0))}, curl::StopToken{token}, curl::MemoryLimit{LIMIT}, curl::OnProgress{bounded});
         if (diagnostic) diagnostic->Response("artwork-login", login_url, login);
         if (token.stop_requested() || login.code != 302) return false;
         const auto cookie_header = login.header.Find("Set-Cookie");
         if (cookie_header == login.header.m_map.end()) return false;
         // The cookie lives only for this metadata read, never in a file/cache.
-        const auto cookie = cookie_header->second.substr(0, cookie_header->second.find(';'));
-        if (cookie.empty() || cookie.find_first_of("\r\n") != std::string::npos) return false;
-        result = request(cookie);
+        cookie = cookie_header->second.substr(0, cookie_header->second.find(';'));
+        return !cookie.empty() && cookie.find_first_of("\r\n") == cookie.npos;
+    };
+    // Reauthenticate once, skipping the expected initial redirect when this
+    // endpoint required a web session on its previous successful request.
+    if (warm && saved.cookie && can_login && !login_session()) return false;
+    auto result = request(cookie, warm);
+    if (token.stop_requested()) return false;
+    if (can_login && cookie.empty() && result.code == 302) {
+        if (!login_session()) return false;
+        result = request(cookie, warm);
     }
-    if (token.stop_requested() || !result.success || result.code != 200 || result.data.size() > LIMIT) return false;
     auto parsed = std::make_shared<ArtworkSnapshot>();
-    if (!index::ParseArtwork(reinterpret_cast<const char*>(result.data.data()), result.data.size(), parsed->records)) return false;
-    for (auto& art : parsed->records) {
-        art.icon = ResolveUrl(endpoint, art.icon);
-        art.banner = ResolveUrl(endpoint, art.banner);
+    bool hit{};
+    if (warm) {
+        if (token.stop_requested() || result.code == 401 || result.code == 403 || result.code == 302) return false;
+        const auto mime = index::Lower(HeaderValue(result.header, "Content-Type"));
+        // A login HTML page cannot release cached metadata from the SD card.
+        const bool metadata_access = result.success && result.code == 200 && mime.find("json") != mime.npos;
+        hit = metadata_access && Cacheable(result.header) && Validators(result.header) == saved.validators
+            && snapshot::Load(candidate, saved, token, Digest, parsed->records);
+        if (diagnostic) diagnostic->Event(hit ? "metadata_snapshot=hit" : "metadata_snapshot=refresh");
+        if (!hit && !token.stop_requested()) result = request(cookie, false);
+    }
+    if (token.stop_requested()) return false;
+    if (!hit) {
+        if (!result.success || result.code != 200 || result.data.size() > LIMIT) return false;
+        if (!index::ParseArtwork(reinterpret_cast<const char*>(result.data.data()), result.data.size(), parsed->records)) return false;
+        for (auto& art : parsed->records) {
+            art.icon = ResolveUrl(endpoint, art.icon);
+            art.banner = ResolveUrl(endpoint, art.banner);
+        }
     }
     parsed->by_identity = index::IndexArtwork(parsed->records);
-    records = parsed;
+    if (token.stop_requested()) return false;
+    std::string staged;
+    if (!hit && !path.empty() && now > 0 && Cacheable(result.header)
+            && index::Lower(HeaderValue(result.header, "Content-Type")).find("json") != std::string::npos
+            && R_SUCCEEDED(fs::FsNativeSd().CreateDirectoryRecursively(CatalogDirectory))) {
+        snapshot::Header header{};
+        header.index = index_digest;
+        header.validators = Validators(result.header);
+        header.cookie = !cookie.empty();
+        header.saved = now;
+        auto temp = path + "." + std::to_string(g_catalog_stage++) + ".part";
+        if (snapshot::Stage(temp, header, parsed->records, token, Digest)) staged = std::move(temp);
+    }
     std::scoped_lock lock(g_artwork_mutex);
+    if (!staged.empty()) {
+        if (!token.stop_requested() && generation == g_catalog_generation.load()) {
+            const auto previous = path + ".bak";
+            // FAT can refuse a rename over an existing file.
+            if (std::rename(staged.c_str(), path.c_str()) == 0) std::remove(previous.c_str());
+            else {
+                std::remove(previous.c_str());
+                if (std::rename(path.c_str(), previous.c_str()) == 0) {
+                    if (std::rename(staged.c_str(), path.c_str()) == 0) std::remove(previous.c_str());
+                    else std::rename(previous.c_str(), path.c_str());
+                }
+            }
+        }
+        std::remove(staged.c_str());
+    }
+    if (token.stop_requested() || generation != g_catalog_generation.load()) return false;
+    records = parsed;
     g_artwork_cache = {root, endpoint, config.user, config.pass, parsed};
     return true;
 }
 
 auto FetchIndex(const std::string& url, const Config& config, std::stop_token token,
     std::shared_ptr<const std::vector<index::File>>& files, std::string& error, bool refresh = false, bool* legacy_result = nullptr,
-    const ConnectionDiagnostic* diagnostic = nullptr, IndexScope scope = IndexScope::Catalog) -> bool {
+    const ConnectionDiagnostic* diagnostic = nullptr, IndexScope scope = IndexScope::Catalog, bool* header_result = nullptr, bool* refused_result = nullptr) -> bool {
+    if (refused_result) *refused_result = false;
     if (!refresh) {
         std::scoped_lock lock(g_index_mutex);
         const auto detail = g_detail_index_cache.find(url);
@@ -395,51 +503,69 @@ auto FetchIndex(const std::string& url, const Config& config, std::stop_token to
         if (cache.Matches(url, config.user, config.pass)) {
             files = cache.files;
             if (legacy_result) *legacy_result = cache.legacy;
+            if (header_result) *header_result = cache.legacy_headers;
             return true;
         }
     }
     // Catalogues are metadata, not packages: refuse an accidental file endpoint
     // before it can grow the metadata buffer to gigabytes.
-    const s64 max_index_bytes = scope == IndexScope::GameFolder ? 2 * 1024 * 1024 : 32 * 1024 * 1024;
+    const size_t max_index_bytes = scope == IndexScope::GameFolder ? 2 * 1024 * 1024 : 32 * 1024 * 1024;
     const auto request = [&](bool legacy) {
         auto result = curl::Api().ToMemory(curl::Url{url}, curl::UserPass{config.user, config.pass},
             curl::PreemptiveAuth{true}, curl::Flags{static_cast<u32>(curl::Flag_KeepErrorBody | (legacy ? curl::Flag_LegacyOwnfoil : 0) | (diagnostic ? curl::Flag_ConnectionDiagnostic : 0))}, curl::StopToken{token},
-            curl::OnProgress{[max_index_bytes](s64 total, s64 now, s64, s64) { return total <= max_index_bytes && now <= max_index_bytes; }});
+            curl::MemoryLimit{max_index_bytes},
+            curl::OnProgress{[max_index_bytes](s64 total, s64 now, s64, s64) { return total <= static_cast<s64>(max_index_bytes) && now <= static_cast<s64>(max_index_bytes); }});
         if (diagnostic) diagnostic->Response(legacy ? "legacy-index-get" : "modern-index-get", url, result);
         return result;
     };
-    bool legacy = config.legacy_html || config.backend == Backend::LegacyHtml;
-    auto result = request(legacy);
-    if (token.stop_requested()) return false;
-    if (result.code == 401 || result.code == 403) {
-        error = "Incorrect username or password"_i18n;
-        return false;
-    }
+    // HTML directory format and header negotiation are independent. Ownfoil 2.4+
+    // serves the same listing with a Sphaira user agent; older builds require
+    // the minimal header set. Retain the working mode for folders and files.
+    bool strict = config.legacy_html ? config.legacy_headers : config.backend == Backend::LegacyHtml;
+    auto result = request(strict);
+    bool legacy{};
+    bool refused{};
     auto parsed = std::make_shared<std::vector<index::File>>();
-    bool parsed_ok{};
-    if (!legacy && result.success && result.code == 200 && result.data.size() <= static_cast<std::size_t>(max_index_bytes)) {
-        parsed_ok = index::Parse(reinterpret_cast<const char*>(result.data.data()), result.data.size(), *parsed, error);
-        if (diagnostic) diagnostic->Event("parser=json accepted=" + std::to_string(parsed_ok) + " entries=" + std::to_string(parsed->size()));
+    auto parse = [&]() {
+        if (!result.success || result.code != 200 || result.data.size() > static_cast<std::size_t>(max_index_bytes)) {
+            refused = result.code == 401 || result.code == 403;
+            error = refused ? "Incorrect username or password"
+                : "Could not load the shop index (HTTP error or metadata size limit)";
+            return false;
+        }
+        const auto bytes = reinterpret_cast<const char*>(result.data.data());
+        if (!strict && !config.legacy_html && config.backend != Backend::LegacyHtml
+                && index::Parse(bytes, result.data.size(), *parsed, error)) return true;
+        if (config.backend == Backend::JsonIndex) return false;
+        // A normal browser or login page can contain links ending in '/'.
+        // Only the dedicated client directory template is eligible here.
+        const std::string_view body(bytes, result.data.size());
+        if (!index::IsOwnfoilDirectory(body)) {
+            error = "The server returned a web page instead of a shop directory";
+            return false;
+        }
+        parsed->clear();
+        legacy = index::ParseHtml(bytes, result.data.size(), *parsed, error, &refused);
+        return legacy;
+    };
+    if (token.stop_requested()) return false;
+    bool parsed_ok = parse();
+    if (!parsed_ok && !refused && !config.legacy_html && config.backend != Backend::JsonIndex) {
+        strict = !strict;
+        result = request(strict);
+        if (token.stop_requested()) return false;
+        parsed_ok = parse();
     }
-    if (!legacy && !parsed_ok && config.backend != Backend::JsonIndex) {
-        legacy = true;
-        result = request(true);
-    }
-    if (!result.success || result.code != 200 || result.data.size() > static_cast<std::size_t>(max_index_bytes)) {
-        error = "Could not load the shop index (HTTP error or metadata size limit)"_i18n;
-        return false;
-    }
-    if (legacy) {
-        parsed_ok = index::ParseHtml(reinterpret_cast<const char*>(result.data.data()), result.data.size(), *parsed, error);
-        if (diagnostic) diagnostic->Event("parser=html accepted=" + std::to_string(parsed_ok) + " entries=" + std::to_string(parsed->size()));
-    }
+    if (refused_result) *refused_result = refused;
+    if (diagnostic) diagnostic->Event("parser=" + std::string(legacy ? "html" : "json")
+        + " accepted=" + std::to_string(parsed_ok) + " entries=" + std::to_string(parsed->size()));
     if (parsed_ok && scope == IndexScope::GameFolder && parsed->size() > 4096) {
         error = "The game folder exceeds the safe catalog scan limit"_i18n;
         return false;
     }
     if (parsed_ok && scope == IndexScope::Catalog && (legacy || !config.metadata_url.empty())) {
         std::shared_ptr<const ArtworkSnapshot> artwork;
-        if (FetchWebArtwork(url, config, token, refresh, artwork, diagnostic)) {
+        if (FetchWebArtwork(url, config, token, refresh, {reinterpret_cast<const char*>(result.data.data()), result.data.size()}, artwork, diagnostic)) {
             index::ApplyArtwork(*parsed, artwork->by_identity);
             index::AddGameFolderCards(*parsed, artwork->records);
         }
@@ -455,6 +581,7 @@ auto FetchIndex(const std::string& url, const Config& config, std::stop_token to
     if (!parsed_ok) { error = i18n::get(error); return false; }
     error.clear();
     if (legacy_result) *legacy_result = legacy;
+    if (header_result) *header_result = strict;
     const auto directory_base = legacy && !url.ends_with('/') ? url + '/' : url;
     for (auto& file : *parsed) {
         file.url = ResolveUrl(directory_base, file.url);
@@ -463,24 +590,28 @@ auto FetchIndex(const std::string& url, const Config& config, std::stop_token to
         file.source_folder = ResolveUrl(directory_base, file.source_folder);
         if (file.platform.empty()) file.platform = index::PlatformFromPath(file.url);
     }
+    index::ApplyNinMagicPlatforms(*parsed, config.artwork_search_url);
     {
         std::scoped_lock lock(g_platform_mutex);
         if (const auto provider = g_learned_platforms.find(config.artwork_search_url); provider != g_learned_platforms.end()) {
             for (auto& file : *parsed) {
                 const auto found = provider->second.find(file.id);
-                if (file.platform.empty() && found != provider->second.end()) { file.platform = found->second; file.platform_learned = true; }
+                if ((file.platform.empty() || file.platform_learned) && found != provider->second.end()) {
+                    file.platform = found->second;
+                    file.platform_learned = true;
+                }
             }
         }
     }
     std::erase_if(*parsed, [](const auto& file) { return file.url.empty(); });
     files = parsed;
     std::scoped_lock lock(g_index_mutex);
-    if (scope == IndexScope::Catalog) g_index_cache = {url, config.user, config.pass, files, legacy};
+    if (scope == IndexScope::Catalog) g_index_cache = {url, config.user, config.pass, files, legacy, strict};
     else {
         std::size_t cached_bytes{};
         for (const auto& entry : g_detail_index_cache) cached_bytes += entry.second.bytes;
         if (g_detail_index_cache.size() >= 32 || cached_bytes + result.data.size() > 8 * 1024 * 1024) g_detail_index_cache.clear();
-        g_detail_index_cache[url] = {{url, config.user, config.pass, files, legacy}, result.data.size()};
+        g_detail_index_cache[url] = {{url, config.user, config.pass, files, legacy, strict}, result.data.size()};
     }
     return true;
 }
@@ -596,9 +727,11 @@ auto FetchIndexTitle(const std::string& base_url, const Config& config, std::sto
         return !file.source_folder.empty() && IndexId(file) == id;
     });
     if (folder_card != files->end()) {
-        const auto root_has_base = std::any_of(files->begin(), files->end(), [&id](const auto& file) {
-            return index::BelongsToGame(file, id) && (file.kind == index::Kind::Base || file.kind == index::Kind::Unknown);
-        });
+        const auto is_verified_base = [&id](const auto& file) {
+            return index::BelongsToGame(file, id) && !file.url.empty() && !file.extension.empty()
+                && (file.kind == index::Kind::Base || file.kind == index::Kind::Unknown);
+        };
+        bool has_base = std::any_of(files->begin(), files->end(), is_verified_base);
         const auto& folder = folder_card->source_folder;
         if (!IsSameOrigin(base_url, folder)) { error = "The game folder is outside the configured server"_i18n; return false; }
         // Read only this selected game's bounded subtree. No startup NAS crawl,
@@ -612,7 +745,7 @@ auto FetchIndexTitle(const std::string& base_url, const Config& config, std::sto
             if (token.stop_requested()) return false;
             std::shared_ptr<const std::vector<index::File>> contents;
             if (!FetchIndex(current.url, config, token, contents, error, false, nullptr, nullptr, IndexScope::GameFolder)) {
-                if (!root_has_base || token.stop_requested()) return false;
+                if (!has_base || token.stop_requested()) return false;
                 out.catalog_partial = true;
                 error.clear();
                 break;
@@ -621,16 +754,17 @@ auto FetchIndexTitle(const std::string& base_url, const Config& config, std::sto
                 if (item.directory && IsSameOrigin(base_url, item.url) && item.url.starts_with(folder)) {
                     pending.Add(item.url, current.depth + 1);
                 } else if (index::BelongsToGame(item, id)) {
+                    has_base = has_base || is_verified_base(item);
                     expanded->push_back(item);
                 }
             }
         }
         if (pending.Incomplete()) {
-            if (!root_has_base) { error = "The game folder exceeds the safe catalog scan limit"_i18n; return false; }
+            if (!has_base) { error = "Se alcanzó el límite de subcarpetas sin encontrar el juego base"; return false; }
             out.catalog_partial = true;
         }
         if (std::none_of(expanded->begin(), expanded->end(), [&id](const auto& file) { return index::BelongsToGame(file, id); })) {
-            error = "No verified package was found for this game folder"_i18n;
+            error = "No se encontró un paquete del juego en su carpeta. Comprueba los archivos en el servidor y actualiza el catálogo.";
             return false;
         }
         files = std::move(expanded);
@@ -685,7 +819,7 @@ auto TryConnect(const std::string& url, const Config& config, std::stop_token to
     if (config.backend != Backend::JsonIndex && config.backend != Backend::LegacyHtml) {
         const auto result = curl::Api().ToMemory(curl::Url{url}, curl::CustomRequest{"OPTIONS"},
             curl::UserPass{config.user, config.pass}, curl::PreemptiveAuth{true},
-            curl::Flags{curl::Flag_KeepErrorBody | curl::Flag_ConnectionDiagnostic}, curl::StopToken{token},
+            curl::Flags{curl::Flag_KeepErrorBody | curl::Flag_ConnectionDiagnostic}, curl::StopToken{token}, curl::MemoryLimit{1024 * 1024},
             curl::OnProgress{[](s64 total, s64 now, s64, s64) { return total <= 1024 * 1024 && now <= 1024 * 1024; }});
         diagnostic.Response("native-options", url, result);
         out.reached = result.code != 0;
@@ -706,7 +840,10 @@ auto TryConnect(const std::string& url, const Config& config, std::stop_token to
     }
     std::shared_ptr<const std::vector<index::File>> files;
     out.error.clear();
-    if (!FetchIndex(url, config, token, files, out.error, true, &out.legacy_html, &diagnostic)) return false;
+    if (!FetchIndex(url, config, token, files, out.error, true, &out.legacy_html, &diagnostic, IndexScope::Catalog, &out.legacy_headers, &out.refused)) {
+        out.reached = out.reached || out.refused;
+        return false;
+    }
     out.success = true;
     out.json_index = true;
     out.base_url = out.legacy_html && !url.ends_with('/') ? url + '/' : url;
@@ -953,6 +1090,20 @@ auto ParseApps(const std::vector<u8>& data, const std::string& base_url, AppType
 
         if (app.name.empty()) {
             app.name = app.app_id;
+        }
+        for (const auto src : {item, yyjson_obj_get(item, "titledb"), yyjson_obj_get(item, "title")}) {
+            for (const auto key : {"platform", "console", "system"}) {
+                if (app.platform.empty()) app.platform = index::PlatformMetadata(GetString(src, key));
+            }
+        }
+        if (app.platform.empty()) app.platform = index::PlatformFromTags(app.name);
+        const auto db = yyjson_obj_get(item, "titledb");
+        const auto db_name = index::Lower(GetString(db, "name"));
+        if (app.platform.empty() && app.app_id.starts_with("01") && !db_name.empty() && db_name != "unrecognized" && db_name != "unknown"
+            && db_name.find("not found in titledb") == std::string::npos
+            && (!app.publisher.empty() || !app.icon.url.empty() || !app.banner.url.empty())) {
+            app.platform = "Nintendo Switch";
+            app.platform_learned = true; // an explicit identification by the configured catalog takes precedence
         }
 
         out.emplace_back(std::move(app));
@@ -1237,9 +1388,9 @@ constexpr const char* UPDATES_QUERY = "query($page:Int!,$pageSize:Int!,$titleIds
 // needs. the ids ride as variables, not in the document, so the shop's parser
 // and validation caches keep hitting however long the console's library gets.
 // fills `variables` with this page's, in `FetchGraphql`'s bare-json shape.
-auto BuildPageQuery(const CatalogQuery& query, std::string& variables) -> std::string {
+auto BuildPageQuery(const CatalogQuery& query, std::string& variables, bool identities_only = false) -> std::string {
     const char* app_type{"BASE"};
-    const char* fields{BASE_FIELDS};
+    const char* fields{identities_only ? "appId titledb{name publisher icon(size:THUMB){url} banner(size:THUMB){url}}" : BASE_FIELDS};
     std::string params{"$page:Int!,$pageSize:Int!"};
     // the arguments this category adds to the apps() call, spliced in whole.
     std::string args{};
@@ -1300,6 +1451,20 @@ struct PublicArtworkCacheEntry {
     bool found{};
     std::chrono::steady_clock::time_point saved;
 };
+struct NativePlatformGroups {
+    std::unordered_map<std::string, std::vector<std::string>> ids;
+    bool confirmed_nes_collection{};
+};
+struct NativeSearchCache {
+    std::string url, user, pass, provider;
+    CatalogQuery query;
+    std::shared_ptr<const NativePlatformGroups> groups;
+    bool Account(const std::string& address, const Config& config) const {
+        return url == address && user == config.user && pass == config.pass && provider == config.artwork_search_url;
+    }
+};
+std::mutex g_native_search_mutex;
+NativeSearchCache g_native_search, g_native_library;
 std::mutex g_public_artwork_mutex;
 std::unordered_map<std::string, PublicArtworkCacheEntry> g_public_artwork_cache;
 std::chrono::steady_clock::time_point g_public_artwork_next{};
@@ -1428,7 +1593,14 @@ auto LookupGamePresentation(const Config& config, const ShopApp& card, std::stop
 }
 
 void InvalidateCatalog(const std::string& base_url, const Config& config) {
-    std::scoped_lock lock(g_index_mutex, g_artwork_mutex, g_public_artwork_mutex);
+    std::scoped_lock lock(g_index_mutex, g_artwork_mutex, g_public_artwork_mutex, g_native_search_mutex);
+    ++g_catalog_generation;
+    const auto path = CatalogSnapshotPath(config.resolved_url.empty() ? base_url : config.resolved_url, config);
+    std::remove(path.c_str());
+    std::remove((path + ".bak").c_str());
+    if (g_native_search.url == base_url && g_native_search.user == config.user && g_native_search.pass == config.pass)
+        g_native_search = {};
+    if (g_native_library.Account(base_url, config)) g_native_library = {};
     std::erase_if(g_public_artwork_cache, [&config](const auto& entry) { return entry.first.starts_with(config.artwork_search_url + '#'); });
     g_index_cache.Invalidate(base_url, config.user, config.pass);
     std::erase_if(g_detail_index_cache, [&base_url, &config](const auto& entry) {
@@ -1438,6 +1610,16 @@ void InvalidateCatalog(const std::string& base_url, const Config& config) {
 }
 
 auto CachedPlatforms(const std::string& base_url, const Config& config) -> std::vector<std::string> {
+    if (!config.json_index) {
+        std::scoped_lock lock(g_native_search_mutex);
+        std::vector<std::string> platforms;
+        if (g_native_library.Account(base_url, config) && g_native_library.groups) {
+            for (const auto& [label, ids] : g_native_library.groups->ids)
+                if (!ids.empty()) platforms.push_back(label.empty() ? "__unknown__" : label);
+            std::sort(platforms.begin(), platforms.end());
+        }
+        return platforms;
+    }
     std::scoped_lock lock(g_index_mutex, g_browse_mutex);
     if (g_index_cache.Matches(base_url, config.user, config.pass) && g_browse.source.lock() == g_index_cache.files && g_browse.index)
         return g_browse.index->platforms;
@@ -1512,24 +1694,10 @@ auto Connect(const Config& config, std::stop_token token) -> ConnectResult {
     return finish(std::move(out));
 }
 
-auto FetchApps(const std::string& base_url, const Config& config, std::stop_token token, const CatalogQuery& query, std::vector<ShopApp>& out, s64& total, std::string& error) -> bool {
-    out.clear();
-    total = 0;
-    if (config.json_index) return FetchIndexApps(base_url, config, token, query, out, total, error);
-
-    // an empty list is no constraint to the shop, so a category narrowed by one
-    // the console can't supply would answer with the whole catalog rather than
-    // the nothing it is; an empty search term matches everything the same way.
-    // New games is the exception: with nothing installed, every game is new.
-    if ((query.category == Category::Favorites && query.app_ids.empty())
-        || (query.category == Category::Updates && query.app_ids.empty())
-        || (query.category == Category::Dlc && query.title_ids.empty())
-        || (query.category == Category::Search && query.search.empty())) {
-        return true;
-    }
-
+static auto FetchNativePage(const std::string& base_url, const Config& config, std::stop_token token, const CatalogQuery& query,
+    std::vector<ShopApp>& out, s64& total, std::string& error, bool identities_only = false) -> bool {
     std::string variables;
-    const auto doc = BuildPageQuery(query, variables);
+    const auto doc = BuildPageQuery(query, variables, identities_only);
 
     log_write("[OWNFOIL] fetching apps page %d (%d per page, category %d, %s %s)\n",
         static_cast<int>(query.page), static_cast<int>(query.page_size),
@@ -1545,7 +1713,110 @@ auto FetchApps(const std::string& base_url, const Config& config, std::stop_toke
     const auto type = query.category == Category::Updates ? AppType::Update
         : query.category == Category::Dlc ? AppType::Dlc
         : AppType::Base;
-    return ParseApps(data, base_url, type, out, total, error);
+    if (!ParseApps(data, base_url, type, out, total, error)) return false;
+    std::scoped_lock lock(g_platform_mutex);
+    if (const auto provider = g_learned_platforms.find(config.artwork_search_url); provider != g_learned_platforms.end()) {
+        for (auto& app : out) {
+            if (!app.platform.empty() && !app.platform_learned) continue;
+            if (const auto known = provider->second.find(app.artwork_id); known != provider->second.end()) {
+                app.platform = known->second;
+                app.platform_learned = true;
+            }
+        }
+    }
+    return true;
+}
+
+static auto FetchScopedNativePage(const std::string& base_url, const Config& config, std::stop_token token, const CatalogQuery& query,
+    std::vector<ShopApp>& out, s64& total, std::string& error) -> bool {
+    // GraphQL can search on the server, but cannot filter by original console.
+    // Keep only ordered IDs across pages. Changing console reuses the same index.
+    const bool library = query.category == Category::All;
+    auto selection = query;
+    selection.platform.clear();
+    auto& cache = library ? g_native_library : g_native_search;
+    std::shared_ptr<const NativePlatformGroups> groups;
+    bool collection{};
+    {
+        std::scoped_lock lock(g_native_search_mutex);
+        if (cache.Account(base_url, config) && cache.query.SameSelection(selection)) groups = cache.groups;
+        if (g_native_library.Account(base_url, config) && g_native_library.groups)
+            collection = g_native_library.groups->confirmed_nes_collection;
+    }
+    if (!groups) {
+        struct Record {
+            std::string id, name, platform;
+            bool platform_learned{};
+        };
+        std::vector<Record> records;
+        auto batch = selection;
+        batch.page_size = library ? 1000 : 200;
+        s64 consumed{}, reported{};
+        for (batch.page = 1; ; ++batch.page) {
+            if (token.stop_requested()) return false;
+            std::vector<ShopApp> rows;
+            if (!FetchNativePage(base_url, config, token, batch, rows, reported, error, true)) return false;
+            if (reported > 100000 || (rows.empty() && consumed < reported)) {
+                error = "El servidor devolvió un catálogo demasiado grande o incompleto.";
+                return false;
+            }
+            consumed += static_cast<s64>(rows.size());
+            for (auto& app : rows) {
+                if (app.app_id.empty()) continue;
+                // Only this collection needs a name for its identity check.
+                auto name = app.app_id.starts_with("05572000") ? std::move(app.name) : std::string{};
+                records.push_back({std::move(app.app_id), std::move(name), std::move(app.platform)});
+            }
+            if (consumed >= reported || rows.empty()) break;
+        }
+        auto found = std::make_shared<NativePlatformGroups>();
+        found->confirmed_nes_collection = index::ApplyNinMagicCollection(records, config.artwork_search_url,
+            [](const Record&) { return true; }, collection);
+        for (auto& game : records) found->ids[game.platform].push_back(std::move(game.id));
+        if (token.stop_requested()) return false;
+        groups = std::move(found);
+        std::scoped_lock lock(g_native_search_mutex);
+        cache = {base_url, config.user, config.pass, config.artwork_search_url, selection, groups};
+    }
+    const auto label = query.platform == "__unknown__" ? std::string{} : query.platform;
+    const auto group = groups->ids.find(label);
+    if (group == groups->ids.end()) { total = 0; return true; }
+    const auto& ids = group->second;
+    total = static_cast<s64>(ids.size());
+    const auto count = std::clamp<s64>(query.page_size, 1, 1000);
+    const auto first = std::max<s64>(0, query.page - 1) * count;
+    if (first >= total) return true;
+    auto page = query;
+    page.category = Category::Favorites;
+    page.page = 1;
+    page.page_size = std::min(count, total - first);
+    page.app_ids.assign(ids.begin() + first, ids.begin() + first + page.page_size);
+    std::vector<ShopApp> rows;
+    s64 reported{};
+    if (!FetchNativePage(base_url, config, token, page, rows, reported, error)) return false;
+    std::unordered_map<std::string, size_t> positions;
+    for (size_t i{}; i < rows.size(); ++i) positions.emplace(rows[i].app_id, i);
+    for (const auto& id : page.app_ids) {
+        auto match = positions.find(id);
+        if (match == positions.end()) continue;
+        auto& row = rows[match->second];
+        if (row.platform.empty() && !label.empty()) { row.platform = label; row.platform_learned = true; }
+        if (MatchesPlatform(query.platform, row.platform)) out.push_back(std::move(row));
+    }
+    return true;
+}
+
+auto FetchApps(const std::string& base_url, const Config& config, std::stop_token token, const CatalogQuery& query, std::vector<ShopApp>& out, s64& total, std::string& error) -> bool {
+    out.clear();
+    total = 0;
+    if (config.json_index) return FetchIndexApps(base_url, config, token, query, out, total, error);
+    if ((query.category == Category::Favorites && query.app_ids.empty())
+        || (query.category == Category::Updates && query.app_ids.empty())
+        || (query.category == Category::Dlc && query.title_ids.empty())
+        || (query.category == Category::Search && query.search.empty())) return true;
+    if ((query.category == Category::Search || query.category == Category::All) && !query.platform.empty())
+        return FetchScopedNativePage(base_url, config, token, query, out, total, error);
+    return FetchNativePage(base_url, config, token, query, out, total, error);
 }
 
 auto FetchUpdates(const std::string& base_url, const Config& config, std::stop_token token, const std::vector<std::string>& title_ids, std::vector<ShopUpdate>& out, std::string& error) -> bool {

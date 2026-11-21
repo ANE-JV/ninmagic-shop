@@ -8,6 +8,10 @@
 namespace sphaira::ownfoil::api {
 enum class Category : std::int64_t { All, NewGames, Updates, Dlc, Search, Favorites };
 
+inline bool MatchesPlatform(std::string_view selected, std::string_view actual) {
+    return selected.empty() || (selected == "__unknown__" ? actual.empty() : selected == actual);
+}
+
 struct CatalogQuery {
     std::int64_t page{1}, page_size{};
     Category category{Category::All};

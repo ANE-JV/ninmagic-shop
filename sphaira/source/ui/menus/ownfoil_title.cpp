@@ -2,6 +2,7 @@
 #include "ui/menus/ownfoil.hpp"
 #include "ui/nvg_util.hpp"
 #include "ui/sidebar.hpp"
+#include "ui/option_box.hpp"
 #include "ui/popup_multi_select.hpp"
 #include "ui/progress_box.hpp"
 #include "ui/install_queue.hpp"
@@ -43,6 +44,31 @@ struct DetailSidebar final : Sidebar {
         : Sidebar{title, subtitle, Side::RIGHT}, m_owner{std::move(owner)} {}
     std::shared_ptr<TitleMenu> m_owner;
 };
+
+// The widget stack owns its pages uniquely. Keep the selected preview alive
+// while it is displayed on that stack, including its in-flight package request.
+class DetailPageView final : public Widget {
+public:
+    DetailPageView(std::shared_ptr<TitleMenu> title, std::function<void()> close)
+        : m_title{std::move(title)}, m_close{std::move(close)} {}
+    ~DetailPageView() override { m_close(); }
+    bool IsMenu() const override { return true; }
+    void Draw(NVGcontext* vg, Theme* theme) override { m_title->Draw(vg, theme); }
+    void Update(Controller* controller, TouchInfo* touch) override {
+        m_title->Update(controller, touch);
+        if (m_title->ShouldPop()) SetPop();
+    }
+    void OnFocusGained() override { Widget::OnFocusGained(); m_title->OnFocusGained(); }
+    void OnFocusLost() override { Widget::OnFocusLost(); m_title->OnFocusLost(); }
+private:
+    std::shared_ptr<TitleMenu> m_title;
+    std::function<void()> m_close;
+};
+
+bool HasDownload(const api::ShopDownload& file) {
+    return !file.url.empty() && (file.extension == "nsp" || file.extension == "nsz"
+        || file.extension == "xci" || file.extension == "xcz");
+}
 
 // the left column is a page of its own. unscrolled its top is drawn at PAGE_Y;
 // scrolled, it runs up under the heading's line and down to the bottom bar's.
@@ -344,11 +370,11 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
     }});
 
     RefreshDetailText();
-    if (mode == Mode::FullPage) Layout();
-
-    // pushed out of sight: the catalog stays on screen until the page can open
-    // whole, which Update decides.
-    SetHidden(mode == Mode::FullPage);
+    if (mode == Mode::FullPage) {
+        m_detail_focused = true;
+        Layout();
+        UpdateActions();
+    }
 
     const auto token = m_stop.get_token();
     // everything the page's threads find is only put on the page from the main
@@ -370,12 +396,11 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
         if (!api::FetchTitle(m_base_url, m_config, token, m_page.id, title, error)) {
             if (!token.stop_requested()) {
                 send([this, error]() {
-                    if (m_mode == Mode::FullPage) App::Notify(m_page.name + ": " + error);
+                    if (IsFullPage()) App::Notify(m_page.name + ": " + error);
                     m_load_error = error;
                     // nothing more is coming from the shop for the page to wait on.
                     m_failed = true;
                     RefreshDetailText();
-                    m_artwork_done = true;
                 });
             }
             return;
@@ -386,8 +411,6 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
         // title itself moves to the main thread. the page's own banner is CLIENT,
         // the box its big image is drawn at; a card's THUMB only stands in.
         const auto banner = title.banner.url.empty() ? m_page.banner : title.banner;
-        const auto screenshots = title.screenshots;
-        const auto dlc = title.dlc;
 
         send([this, title = std::move(title)]() mutable {
             m_title = std::move(title);
@@ -414,10 +437,11 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
 
             m_loaded = true;
             RefreshDetailText();
-            if (m_mode == Mode::FullPage) {
+            if (IsFullPage()) {
                 BuildFacts();
                 SetImageIndex(m_image_index);
                 Layout();
+                StartGallery();
             }
         });
 
@@ -434,43 +458,9 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
                 if (!image.data.empty()) {
                     m_banner = CreateTexture(image);
                 }
-                m_artwork_done = true;
             });
         }
 
-        // The catalog preview needs one banner, not every screenshot or DLC
-        // texture. The same fetched metadata still drives the real planner.
-        if (m_mode == Mode::Preview) return;
-
-        // in order, so the thumbnails fill in left to right. these queue behind
-        // the title above, so the slot each one lands in already exists.
-        for (size_t i = 0; i < screenshots.size() && !token.stop_requested(); i++) {
-            auto image = LoadShopImage(m_config, m_page.id, screenshots[i], "screenshot", token);
-            if (image.data.empty()) {
-                continue;
-            }
-
-            send([this, i, image = std::move(image)]() {
-                if (i < m_screenshots.size() && !m_screenshots[i]) {
-                    m_screenshots[i] = CreateTexture(image);
-                }
-            });
-        }
-
-        // last, since the rows are the furthest down the page. cached under the
-        // same name a dlc card uses, so one the catalog has shown is read back.
-        for (size_t i = 0; i < dlc.size() && !token.stop_requested(); i++) {
-            auto image = LoadShopImage(m_config, dlc[i].app_id, dlc[i].banner, "banner", token);
-            if (image.data.empty()) {
-                continue;
-            }
-
-            send([this, i, image = std::move(image)]() {
-                if (i < m_rows.size() && !m_rows[i].image) {
-                    m_rows[i].image = CreateTexture(image);
-                }
-            });
-        }
     });
 
     // the installed lookup mounts the game's control nca, so it runs beside the
@@ -503,7 +493,7 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
             m_presentation = std::move(presentation);
             m_presentation_done = true;
             RefreshDetailText();
-            if (m_mode == Mode::FullPage) {
+            if (IsFullPage()) {
                 BuildFacts();
                 Layout();
             }
@@ -514,7 +504,6 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
             if (!image.data.empty() && !token.stop_requested()) {
                 send([this, image = std::move(image)]() {
                     m_presentation_artwork = CreateTexture(image);
-                    m_artwork_done = true;
                 });
                 if (m_mode == Mode::Preview) return;
             }
@@ -529,19 +518,79 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
                 if (!icon.data.empty()) {
                     m_icon = CreateTexture(icon);
                 }
-                m_artwork_done = true;
             });
             return;
         }
 
         // a dlc names its game beside this icon, which the page doesn't wait for:
-        // it can be a download, and on the console one held a page to OPEN_WAIT_MS.
+        // it can take longer than the package query.
         if (m_page.dlc) {
             if (auto image = LoadShopImage(m_config, artwork_id, m_page.icon, "icon", token); !image.data.empty()) {
                 send([this, image = std::move(image)]() {
                     m_icon = CreateTexture(image);
                 });
             }
+        }
+    });
+    if (!m_loader->IsRunning() || !m_console->IsRunning()) {
+        m_failed = true;
+        m_load_error = "No se pudo iniciar la consulta. Vuelve a la biblioteca y abre el juego de nuevo.";
+    }
+}
+
+void TitleMenu::OpenFullPage() {
+    if (m_promoted) return;
+    m_promoted = true;
+    m_detail_focused = true;
+    m_detail_action = 3;
+    SetPop(false);
+    if (m_loaded) BuildFacts();
+    Layout();
+    UpdateActions();
+    App::Push<DetailPageView>(shared_from_this(), [this] {
+        m_promoted = false;
+        m_detail_focused = false;
+        m_pending_action = PendingAction::None;
+        SetPop(false);
+    });
+    StartGallery();
+}
+
+void TitleMenu::StartGallery() {
+    if (!m_loaded || m_gallery || (m_title.screenshots.empty() && m_title.dlc.empty())) return;
+    const auto token = m_stop.get_token();
+    m_gallery = std::make_unique<utils::Async>([this, token, screenshots = m_title.screenshots, dlc = m_title.dlc] {
+        const auto send = [token](std::function<void()>&& callback) {
+            evman::push(evman::CallbackEventData{std::move(callback), token}, false);
+        };
+        // in order, so the thumbnails fill in left to right. these queue behind
+        // the title above, so the slot each one lands in already exists.
+        for (size_t i = 0; i < screenshots.size() && !token.stop_requested(); i++) {
+            auto image = LoadShopImage(m_config, m_page.id, screenshots[i], "screenshot", token);
+            if (image.data.empty()) {
+                continue;
+            }
+
+            send([this, i, image = std::move(image)]() {
+                if (i < m_screenshots.size() && !m_screenshots[i]) {
+                    m_screenshots[i] = CreateTexture(image);
+                }
+            });
+        }
+
+        // last, since the rows are the furthest down the page. cached under the
+        // same name a dlc card uses, so one the catalog has shown is read back.
+        for (size_t i = 0; i < dlc.size() && !token.stop_requested(); i++) {
+            auto image = LoadShopImage(m_config, dlc[i].app_id, dlc[i].banner, "banner", token);
+            if (image.data.empty()) {
+                continue;
+            }
+
+            send([this, i, image = std::move(image)]() {
+                if (i < m_rows.size() && !m_rows[i].image) {
+                    m_rows[i].image = CreateTexture(image);
+                }
+            });
         }
     });
 }
@@ -552,6 +601,7 @@ TitleMenu::~TitleMenu() {
     m_stop.request_stop();
     m_loader.reset();
     m_console.reset();
+    m_gallery.reset();
 
     DeleteTexture(m_banner);
     DeleteTexture(m_icon);
@@ -565,22 +615,29 @@ TitleMenu::~TitleMenu() {
 }
 
 auto TitleMenu::HasBasePackage() const -> bool {
-    return std::any_of(m_title.versions.begin(), m_title.versions.end(), [](const auto& version) { return version.base; });
+    return std::any_of(m_title.versions.begin(), m_title.versions.end(), [](const auto& version) { return version.base && HasDownload(version.download); });
 }
 
 auto TitleMenu::HasUpdatePackage() const -> bool {
-    return std::any_of(m_title.versions.begin(), m_title.versions.end(), [](const auto& version) { return !version.base; });
+    return std::any_of(m_title.versions.begin(), m_title.versions.end(), [](const auto& version) { return !version.base && HasDownload(version.download); });
+}
+
+auto TitleMenu::HasPackage() const -> bool {
+    if (m_page.dlc) return HasDownload(m_page.download);
+    return HasBasePackage() || HasUpdatePackage() || std::any_of(m_title.dlc.begin(), m_title.dlc.end(),
+        [](const auto& content) { return HasDownload(content.download); });
 }
 
 void TitleMenu::ChoosePanelVersion() {
     m_install_version = -1;
     for (s64 index = 0; index < static_cast<s64>(m_title.versions.size()); ++index) {
         const auto& version = m_title.versions[index];
+        if (!HasDownload(version.download)) continue;
         if ((version.base && m_base_selected && !m_update_selected) || (!version.base && m_update_selected)) m_install_version = index;
     }
     if (m_install_version < 0 && m_base_selected) {
         for (s64 index = 0; index < static_cast<s64>(m_title.versions.size()); ++index)
-            if (m_title.versions[index].base) m_install_version = index;
+            if (m_title.versions[index].base && HasDownload(m_title.versions[index].download)) m_install_version = index;
     }
 }
 
@@ -590,31 +647,42 @@ void TitleMenu::EnsureSelection() {
     m_base_selected = HasBasePackage();
     m_update_selected = HasUpdatePackage();
     m_install_dlc.resize(m_rows.size());
-    for (size_t index = 0; index < m_rows.size(); ++index) m_install_dlc[index] = !m_rows[index].installed;
-    m_dlc_selected = m_page.dlc ? !m_dlc_installed : std::find(m_install_dlc.begin(), m_install_dlc.end(), 1) != m_install_dlc.end();
+    for (size_t index = 0; index < m_rows.size(); ++index) m_install_dlc[index] = !m_rows[index].installed && HasDownload(m_title.dlc[index].download);
+    m_dlc_selected = m_page.dlc ? !m_dlc_installed && HasDownload(m_page.download) : std::find(m_install_dlc.begin(), m_install_dlc.end(), 1) != m_install_dlc.end();
     ChoosePanelVersion();
 }
 
-void TitleMenu::PollPreview() {
+auto TitleMenu::PollPreview() -> bool {
     if (const auto finished = InstallQueue::Get().GetFinishedCounter();
             finished != m_queue_finished && (!m_console || m_console->HasFinished())) {
         m_queue_finished = finished;
         m_console_loaded = false;
         const auto token = m_stop.get_token();
         m_console = std::make_unique<utils::Async>([this, token] { LoadInstalled(token); });
+        if (!m_console->IsRunning()) {
+            m_failed = true;
+            m_load_error = "No se pudo comprobar el contenido instalado. Vuelve a abrir la tienda.";
+        }
     }
     EnsureSelection();
-    if (m_failed) { m_pending_action = PendingAction::None; return; }
-    if (!IsReady() || m_pending_action == PendingAction::None) return;
+    if (m_pending_action == PendingAction::None || (!m_failed && !IsReady())) return false;
     const auto action = std::exchange(m_pending_action, PendingAction::None);
-    if (action == PendingAction::Options) ShowInstallOptions();
-    else if (action == PendingAction::Queue && HasSomethingToInstall()) Install();
+    if (action == PendingAction::Options) OpenInstallOptions();
+    else QueueSelectedPackage();
+    return true;
 }
 
 void TitleMenu::OpenInstallOptions() {
-    if (m_failed) { App::Notify(m_load_error.empty() ? "No se pudo leer el contenido de este juego." : m_load_error); return; }
+    if (m_failed) {
+        App::Push<OptionBox>("No se pudo preparar la instalación\n" + m_load_error, "Volver");
+        return;
+    }
     EnsureSelection();
     if (!IsReady()) { m_pending_action = PendingAction::Options; return; }
+    if (!HasPackage()) {
+        App::Push<OptionBox>("Sin archivos instalables\nLa tienda no ha entregado un enlace de paquete para este juego. Actualiza el catálogo y revisa su carpeta en el servidor.", "Volver");
+        return;
+    }
     ShowInstallOptions();
 }
 
@@ -632,11 +700,16 @@ auto TitleMenu::DetailActionBounds(s64 action) const -> Vec4 {
 }
 
 auto TitleMenu::DetailActionAvailable(s64 action) const -> bool {
+    if (action == 3) return true; // The review can be requested while its files are being resolved.
     if (!IsReady()) return false;
     if (action == 0) return HasBasePackage();
     if (action == 1) return HasUpdatePackage();
-    if (action == 2) return m_page.dlc ? !m_dlc_installed : std::any_of(m_rows.begin(), m_rows.end(), [](const auto& row) { return !row.installed; });
-    if (action == 3) return HasBasePackage() || HasUpdatePackage() || !m_rows.empty() || (m_page.dlc && !m_page.download.url.empty());
+    if (action == 2) {
+        if (m_page.dlc) return HasDownload(m_page.download) && !m_dlc_installed;
+        for (size_t i = 0; i < m_rows.size(); ++i)
+            if (!m_rows[i].installed && HasDownload(m_title.dlc[i].download)) return true;
+        return false;
+    }
     return HasSomethingToInstall();
 }
 
@@ -660,7 +733,7 @@ void TitleMenu::ActivateDetailAction(s64 action) {
     } else {
         m_dlc_selected = !m_dlc_selected;
         for (size_t index = 0; index < m_install_dlc.size(); ++index)
-            m_install_dlc[index] = m_dlc_selected && !m_rows[index].installed;
+            m_install_dlc[index] = m_dlc_selected && !m_rows[index].installed && HasDownload(m_title.dlc[index].download);
     }
 }
 
@@ -675,9 +748,10 @@ auto TitleMenu::HandleDetailTouch(const TouchInfo* touch) -> bool {
 
 auto TitleMenu::HandleDetailController(Controller* controller) -> bool {
     m_detail_focused = true;
+    if (IsFullPage() && controller->GotDown(Button::B)) { SetPop(); return true; }
     if (controller->GotDown(Button::B | Button::DPAD_LEFT | Button::LS_LEFT)) {
         m_detail_focused = false;
-        if (m_mode == Mode::FullPage) { m_action = MainAction::None; UpdateActions(); }
+        if (IsFullPage()) { m_action = MainAction::None; UpdateActions(); }
         return false;
     }
     const auto direction = controller->GotDown(Button::DPAD_UP | Button::LS_UP) ? -1 : controller->GotDown(Button::DPAD_DOWN | Button::LS_DOWN) ? 1 : 0;
@@ -687,8 +761,8 @@ auto TitleMenu::HandleDetailController(Controller* controller) -> bool {
         if (next >= 0 && next < 5) m_detail_action = next;
         App::PlaySoundEffect(SoundEffect::Scroll);
     }
-    if (m_mode == Mode::FullPage) {
-        const auto hint = m_detail_action < 3 ? "Marcar" : m_detail_action == 3 ? "Instalar" : "Añadir a la cola";
+    if (IsFullPage()) {
+        const auto hint = m_detail_action < 3 ? "Marcar" : m_detail_action == 3 ? "Revisar instalación" : "Añadir a la cola";
         SetAction(Button::A, Action{hint, [this] { ActivateDetailAction(m_detail_action); }});
         RemoveAction(Button::Y);
     }
@@ -699,7 +773,9 @@ auto TitleMenu::HandleDetailController(Controller* controller) -> bool {
 void TitleMenu::DrawDetailPanel(NVGcontext* vg, Theme*, const Vec4& bounds, int fallback_artwork) {
     m_detail_bounds = bounds;
     EnsureSelection();
-    const auto note = m_failed ? "No se pudo leer el contenido" : !IsReady() ? "Consultando contenido..."
+    const auto note = m_failed ? "Pulsa para ver el motivo" : !IsReady()
+        ? (m_pending_action == PendingAction::Options ? "Abriendo la selección al terminar…" : "Comprobando los archivos del juego…")
+        : !HasPackage() ? "El servidor no indicó archivos instalables"
         : m_title.catalog_partial ? "Contenido parcial: revisa los extras"
         : HasSomethingToInstall() ? "Instalar el juego con sus extras" : "Contenido instalado o sin selección";
     sphaira::ui::shop::DetailPanelState state;
@@ -715,6 +791,7 @@ void TitleMenu::DrawDetailPanel(NVGcontext* vg, Theme*, const Vec4& bounds, int 
     state.ready = IsReady();
     state.selected = {m_base_selected, m_update_selected, m_dlc_selected};
     state.available = {DetailActionAvailable(0), DetailActionAvailable(1), DetailActionAvailable(2)};
+    state.primary_label = m_failed || (IsReady() && !HasPackage()) ? "Ver motivo" : IsReady() ? "Instalar paquete" : "Revisar instalación";
     state.primary_enabled = DetailActionAvailable(3);
     state.queue_enabled = DetailActionAvailable(4);
     state.focused = m_detail_focused;
@@ -736,20 +813,9 @@ void TitleMenu::DrawPreviewSummary(NVGcontext* vg, const Vec4& bounds, const api
 }
 
 void TitleMenu::Update(Controller* controller, TouchInfo* touch) {
-    PollPreview();
-    // the page opens whole: hidden until the shop, the console and its artwork have
-    // answered, or OPEN_WAIT_MS has passed. presses meanwhile are swallowed.
-    if (IsHidden()) {
-        const auto ready = (m_loaded || m_failed) && m_console_loaded && m_artwork_done;
-        if (!ready && m_opened.GetMs() < OPEN_WAIT_MS) {
-            return;
-        }
-
-        log_write("[OWNFOIL] page for %s shown after %zums%s\n", m_page.id.c_str(), m_opened.GetMs(), ready ? "" : " (waited out)");
-        SetHidden(false);
-    }
-
+    if (PollPreview()) return;
     if (HandleDetailTouch(touch)) { m_detail_focused = true; return; }
+    if (m_detail_focused && (touch->is_clicked || touch->is_scroll)) m_detail_focused = false;
     if (m_detail_focused) { m_detail_focused = HandleDetailController(controller); return; }
     if (controller->GotDown(Button::DPAD_RIGHT | Button::LS_RIGHT) && m_focus < 0) {
         m_detail_focused = true;
@@ -950,10 +1016,7 @@ void TitleMenu::LoadInstalled(std::stop_token token) {
     if (m_page.dlc) {
         dlc_installed = installed::HasDlc(m_page.game_id, m_page.id);
     } else {
-        version = installed::InstalledVersionOf(m_page.game_id);
-        // asked before the shop has said whether there is any dlc: one ns
-        // query is cheaper than waiting to find out.
-        installed_dlc = installed::InstalledDlcIds(m_page.game_id);
+        version = installed::InstalledVersionOf(m_page.game_id, installed_dlc);
     }
     log_write("[OWNFOIL] console answered for %s after %zums\n", m_page.id.c_str(), m_opened.GetMs());
 
@@ -965,7 +1028,7 @@ void TitleMenu::LoadInstalled(std::stop_token token) {
         MarkInstalled();
 
         // until the shop answers there are no facts for it to join.
-        if (m_loaded && m_mode == Mode::FullPage) {
+        if (m_loaded && IsFullPage()) {
             BuildFacts();
             Layout();
         }
@@ -1153,7 +1216,7 @@ void TitleMenu::UpdateActions() {
 
     // A follows what is on screen: a highlighted row opens that dlc's page, and
     // anything else the install menu, which waits on the shop's answer.
-    const auto action = focused ? MainAction::View : (m_loaded ? MainAction::Install : MainAction::None);
+    const auto action = focused ? MainAction::View : MainAction::Install;
     if (action != m_action) {
         m_action = action;
         switch (action) {
@@ -1162,7 +1225,7 @@ void TitleMenu::UpdateActions() {
                 break;
 
             case MainAction::Install:
-                SetAction(Button::A, Action{"Install"_i18n, [this]{
+                SetAction(Button::A, Action{"Revisar instalación", [this]{
                     OpenInstallOptions();
                 }});
                 break;
@@ -1188,7 +1251,7 @@ void TitleMenu::UpdateActions() {
     }
 
     // the counter is for whatever left and right, or up and down, step through.
-    char counter[32]{};
+    char counter[48]{};
     if (focused && m_rows.size() > 1) {
         std::snprintf(counter, sizeof(counter), "%ld / %zu", m_focus + 1, m_rows.size());
     } else if (!focused && ImagesInView() && GetImageCount() > 1) {
@@ -1242,8 +1305,8 @@ void TitleMenu::ShowInstallOptions() {
         // asked as the list is drawn, so turning Allow downgrade on under Install
         // options lights the older updates up the next time the list is opened.
         picker->SetDisabled([this](s64 index){
-            return index >= 0 && index < static_cast<s64>(m_title.versions.size())
-                && !sphaira::ownfoil::plan::Offered(PlannedVersion(m_title.versions[index]), {m_installed.installed, static_cast<uint64_t>(m_installed.version)}, App::GetApp()->m_allow_downgrade.Get());
+            if (index < 0 || index >= static_cast<s64>(m_title.versions.size()) || !HasDownload(m_title.versions[index].download)) return true;
+            return !sphaira::ownfoil::plan::Offered(PlannedVersion(m_title.versions[index]), {m_installed.installed, static_cast<uint64_t>(m_installed.version)}, App::GetApp()->m_allow_downgrade.Get());
         });
     }
 
@@ -1255,7 +1318,7 @@ void TitleMenu::ShowInstallOptions() {
         const auto first = m_install_dlc.size() != m_rows.size();
         m_install_dlc.resize(m_rows.size());
         for (size_t i = 0; i < m_rows.size(); i++) {
-            if (m_rows[i].installed) {
+            if (m_rows[i].installed || !HasDownload(m_title.dlc[i].download)) {
                 m_install_dlc[i] = 0;
             } else if (first) {
                 m_install_dlc[i] = 1;
@@ -1293,8 +1356,11 @@ void TitleMenu::Install() {
     // PopToMenu can release the dialog's last preview reference; keep the model
     // alive until its immutable targets have been handed to the queue.
     [[maybe_unused]] const auto keep_alive = weak_from_this().lock();
+    if (!IsReady() || !HasSomethingToInstall()) return;
     if (!App::GetInstallEnable()) {
-        App::ShowEnableInstallPrompt();
+        App::PromptInstallEnable([this, keep_alive, token = m_stop.get_token()] {
+            if (!token.stop_requested() && App::GetInstallEnable()) Install();
+        });
         return;
     }
 
@@ -1310,7 +1376,7 @@ void TitleMenu::Install() {
     const auto add = [&targets, &missing](const api::ShopDownload& download, u64 id) {
         // the download serves no file name, so without the extension there is
         // no telling which container to read.
-        if (download.url.empty() || download.extension.empty()) {
+        if (!HasDownload(download)) {
             missing = true;
             return;
         }
@@ -1365,7 +1431,7 @@ void TitleMenu::Install() {
     InstallQueue::Get().Add(GetName(), 0, [config = m_config, base_url = m_base_url, targets](ProgressBox* pbox) -> Result {
         for (const auto& target : targets) {
             const auto local = sphaira::ownfoil::IsSameOrigin(base_url, target.download.url);
-            yati::source::Http source{target.download.url, local ? config.user : "", local ? config.pass : "", pbox->GetToken(), config.legacy_html};
+            yati::source::Http source{target.download.url, local ? config.user : "", local ? config.pass : "", pbox->GetToken(), config.legacy_headers};
 
             yati::ConfigOverride config_override{};
             config_override.title_ids = target.ids;
@@ -1381,10 +1447,12 @@ void TitleMenu::Install() {
 
 void TitleMenu::ShowAddons(const std::function<void()>& changed) {
     PopupMultiSelect::Items items;
-    for (const auto& row : m_rows) {
+    for (size_t i = 0; i < m_rows.size(); ++i) {
+        const auto& row = m_rows[i];
+        const bool unavailable = !HasDownload(m_title.dlc[i].download);
         // the name the page's own row carries, and the console's answer about it:
         // one it already holds is listed, greyed out, rather than offered.
-        items.emplace_back(PopupMultiSelect::Item{row.name, row.installed ? "Installed"_i18n : std::string{}, row.installed});
+        items.emplace_back(PopupMultiSelect::Item{row.name, unavailable ? "Sin archivo" : row.installed ? "Installed"_i18n : std::string{}, row.installed || unavailable});
     }
 
     // the popup ticks the page's own vector in place and calls back on every
@@ -1416,7 +1484,7 @@ auto TitleMenu::GetInstallLabel() const -> std::string {
 auto TitleMenu::HasSomethingToInstall() const -> bool {
     // a dlc's page installs the one thing: the dlc.
     if (m_page.dlc) {
-        return m_dlc_selected && !m_dlc_installed;
+        return m_dlc_selected && !m_dlc_installed && HasDownload(m_page.download);
     }
 
     // installed add-ons are never ticked, so any tick is something new.
@@ -1428,6 +1496,7 @@ auto TitleMenu::HasSomethingToInstall() const -> bool {
         return false;
     }
 
+    if (!HasDownload(m_title.versions[m_install_version].download)) return false;
     if (!m_installed.installed) {
         return true;
     }

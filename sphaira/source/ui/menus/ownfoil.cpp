@@ -345,7 +345,7 @@ void Menu::RetirePreview() {
     m_retired_preview = std::move(m_preview);
 }
 
-void Menu::UpdatePreview() {
+void Menu::UpdatePreview(bool immediate) {
     if (m_retired_preview && m_retired_preview->PreviewWorkersFinished()) m_retired_preview.reset();
     if (m_mode != Mode::Home || m_entry_index < 0 || m_entry_index >= static_cast<s64>(m_entries.size())) return;
     const auto& selected = m_entries[m_entry_index].app;
@@ -354,9 +354,9 @@ void Menu::UpdatePreview() {
         RetirePreview(); m_preview_id = identity; m_preview_changed_tick = armGetSystemTick();
     }
     if (selected.directory) return;
-    if (!m_preview && !m_retired_preview && armTicksToNs(armGetSystemTick() - m_preview_changed_tick) >= 160000000ULL)
+    if (!m_preview && (immediate || (!m_retired_preview && armTicksToNs(armGetSystemTick() - m_preview_changed_tick) >= 160000000ULL)))
         m_preview = std::make_shared<TitleMenu>(m_config, m_base_url, MakeTitlePage(selected), TitleMenu::Mode::Preview);
-    if (m_preview) m_preview->PollPreview();
+    if (!immediate && m_preview) m_preview->PollPreview();
 }
 
 void Menu::OnViewChange() {
@@ -577,6 +577,7 @@ void Menu::DrawHome(NVGcontext* vg, Theme* theme) {
     if (!m_folder_names.empty()) state.location += "  /  " + m_folder_names.back();
     else if (!m_config.name.empty()) state.location += "  /  " + m_config.name;
     state.search = m_search;
+    state.search_hint = "Buscar en " + SearchScope() + "…";
     state.storage = m_sd_free >= 0 ? "microSD · " + utils::formatSizeStorage(m_sd_free) + " libres" : "microSD";
     state.page = m_fetch_error.empty() ? "Página " + std::to_string(m_page + 1) + " / " + std::to_string(GetPageMax()) + " · ZL / ZR" : "No se pudo cargar · − Opciones para reintentar";
     const auto& catalog_status = m_catalog_status;
@@ -954,6 +955,7 @@ void Menu::ConnectTo(const sphaira::ownfoil::Config& config) {
         auto connected_config = config;
         connected_config.json_index = connect_result.json_index;
         connected_config.legacy_html = connect_result.legacy_html;
+        connected_config.legacy_headers = connect_result.legacy_headers;
         bool saved_changed{};
         std::vector<sphaira::ownfoil::api::ShopApp> fetched;
         std::string fetch_error;
@@ -1270,12 +1272,10 @@ void Menu::SetCatalogTitle() {
         title += total;
     }
 
-    if (!m_platform.empty()) title += SEPARATOR + (m_platform == "__unknown__" ? std::string{"Sin clasificar"} : m_platform);
-    if (!m_folder_names.empty()) title += SEPARATOR + m_folder_names.back();
-    if (CATEGORIES[m_category].category == sphaira::ownfoil::api::Category::Search) {
-        title += SEPARATOR;
-        title += m_consolidated ? (m_platform.empty() ? "Toda la biblioteca" : "Consola actual") : m_config.legacy_html ? "Carpeta actual" : m_config.json_index ? "Índice actual" : "Todo el catálogo";
-    }
+    if (CATEGORIES[m_category].category == sphaira::ownfoil::api::Category::Search)
+        title += SEPARATOR + SearchScope();
+    else if (!m_folder_names.empty()) title += SEPARATOR + m_folder_names.back();
+    else if (!m_platform.empty()) title += SEPARATOR + (m_platform == "__unknown__" ? std::string{"Sin clasificar"} : m_platform);
     SetTitleSubHeading(title);
 }
 
@@ -1293,7 +1293,7 @@ void Menu::ShowCategories() {
     for (const auto& entry : m_entries) {
         if (entry.app.directory) panel->Add<SidebarEntryCallback>(entry.app.name, [this, app = entry.app] { EnterDirectory(app); }, true);
     }
-    const auto platforms = sphaira::ownfoil::api::CachedPlatforms(m_base_url, m_config);
+    const auto& platforms = PlatformChoices();
     if (!platforms.empty()) {
         panel->Add<SidebarEntryTextBase>("Consolas detectadas", "Carpeta y metadatos consultados", SidebarEntryTextBase::Callback{});
         panel->Add<SidebarEntryCallback>("Todas las consolas", [this] {
@@ -1322,28 +1322,30 @@ void Menu::ShowCategories() {
     }
 }
 
+auto Menu::SearchScope() const -> std::string {
+    if (!m_consolidated) return m_folder_names.empty() ? "esta carpeta" : m_folder_names.back();
+    if (m_platform.empty()) return "toda la biblioteca";
+    return m_platform == "__unknown__" ? "Sin clasificar" : m_platform;
+}
+
 void Menu::ShowSearch(s64 index) {
     std::string term;
 
     // the term on screen is the initial text: narrowing a search that came back
     // too wide is far more common than starting an unrelated one.
-    if (R_FAILED(swkbd::ShowText(term, "Buscar juego", "Nombre o ID · toda la biblioteca", m_search.c_str(), 1, SEARCH_MAX)) || term.empty()) {
+    const auto scope_hint = "Nombre o ID · " + SearchScope();
+    if (R_FAILED(swkbd::ShowText(term, "Buscar juego", scope_hint.c_str(), m_search.c_str(), 1, SEARCH_MAX)) || term.empty()) {
         // backing out of the keyboard leaves the catalog that was up, up.
         return;
     }
 
     // the same term against the same catalog would come back the same.
-    if (index == m_category && term == m_search && m_platform.empty() && m_directory_stack.empty() && m_consolidated) {
+    if (index == m_category && term == m_search) {
         return;
     }
 
     m_search = term;
     m_category = index;
-    if (!m_directory_stack.empty()) m_base_url = m_directory_stack.front();
-    m_directory_stack.clear();
-    m_folder_names.clear();
-    m_consolidated = true;
-    m_platform.clear();
     m_sidebar_focus = m_detail_focus = false;
     if (!m_base_url.empty() && !m_connecting) {
         FreeEntries();
@@ -1476,7 +1478,8 @@ void Menu::OpenSelected() {
     const auto& app = m_entries[m_entry_index].app;
     if (app.directory) { EnterDirectory(app); return; }
 
-    App::Push<TitleMenu>(m_config, m_base_url, MakeTitlePage(app));
+    UpdatePreview(true);
+    if (m_preview) m_preview->OpenFullPage();
 }
 
 void Menu::EditSelected() {

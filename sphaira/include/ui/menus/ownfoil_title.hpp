@@ -94,12 +94,13 @@ struct TitleMenu final : MenuBase, std::enable_shared_from_this<TitleMenu> {
 
     // One metadata/selection/planner owner for both the full page and the
     // catalog's right pane. Preview polling never consumes catalog controls.
-    void PollPreview();
+    auto PollPreview() -> bool;
+    void OpenFullPage();
     static void DrawPreviewSummary(NVGcontext* vg, const Vec4& bounds,
         const sphaira::ownfoil::api::ShopApp& app, int fallback_artwork);
     void CancelPreview() { m_stop.request_stop(); }
     auto PreviewWorkersFinished() const -> bool {
-        return (!m_loader || m_loader->HasFinished()) && (!m_console || m_console->HasFinished());
+        return (!m_loader || m_loader->HasFinished()) && (!m_console || m_console->HasFinished()) && (!m_gallery || m_gallery->HasFinished());
     }
     void DrawDetailPanel(NVGcontext* vg, Theme* theme, const Vec4& bounds, int fallback_artwork = 0);
     auto HandleDetailTouch(const TouchInfo* touch) -> bool;
@@ -113,17 +114,15 @@ struct TitleMenu final : MenuBase, std::enable_shared_from_this<TitleMenu> {
 private:
     void EnsureSelection();
     void ChoosePanelVersion();
+    void StartGallery();
+    auto HasPackage() const -> bool;
+    auto IsFullPage() const -> bool { return m_mode == Mode::FullPage || m_promoted; }
     void ActivateDetailAction(s64 action);
     auto HasBasePackage() const -> bool;
     auto HasUpdatePackage() const -> bool;
     auto DetailActionBounds(s64 action) const -> Vec4;
     auto DetailActionAvailable(s64 action) const -> bool;
 
-    // how long a page stays hidden waiting to open whole, from the press. on the
-    // console a cached page is ready in ~70-100ms and one downloading its banner
-    // in ~160-210ms, so this lets the second open whole too; a slower shop opens
-    // at this and fills in, since a longer wait reads as the press being ignored.
-    static constexpr u64 OPEN_WAIT_MS = 220;
 
     // one row of the fact list, its label already translated.
     struct Fact {
@@ -208,6 +207,7 @@ private:
     const std::string m_base_url;
     const TitlePage m_page;
     const Mode m_mode;
+    bool m_promoted{};
     std::string m_load_error{};
     bool m_selection_ready{};
     bool m_base_selected{true};
@@ -219,7 +219,7 @@ private:
     enum class PendingAction { None, Options, Queue };
     PendingAction m_pending_action{PendingAction::None};
 
-    // what OPEN_WAIT_MS counts from, and what the log's timings measure against.
+    // Baseline for the package and console timing log.
     const TimeStamp m_opened{};
 
     sphaira::ownfoil::api::ShopTitle m_title{};
@@ -243,9 +243,6 @@ private:
     int m_banner{};
     int m_icon{};
     int m_presentation_artwork{};
-    // the artwork the page opens on has landed, or failed to: its own banner,
-    // fetched once the shop names it, or the card's icon standing in for one.
-    bool m_artwork_done{};
     std::vector<int> m_screenshots{};
     s64 m_image_index{};
 
@@ -281,6 +278,7 @@ private:
     // the console's answer, then the card's icon off the sd card: neither is a
     // reason to hold the shop's request up.
     std::unique_ptr<utils::Async> m_console{};
+    std::unique_ptr<utils::Async> m_gallery{};
     // the install queue's finished count when this page last looked.
     u64 m_queue_finished{};
 };

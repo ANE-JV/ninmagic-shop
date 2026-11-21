@@ -42,6 +42,10 @@ int main(int argc, char** argv) {
     assert(Parse(raw, std::strlen(raw), files, error));
     assert(files.size() == 1 && files[0].name == "Example" && files[0].extension == "xci");
     const auto html = R"(<html><table><a href="Example%20[0100123456780000][v0].nsp"> </a><a href="Folder &amp; Extra/"> </a><a href="../"> </a></table></html>)";
+    assert(IsOwnfoilDirectory("<!DOCTYPE html>\n<html>\n<body>\n<table>\n<a href='A/'> </a>\n</table></body></html>"));
+    assert(IsOwnfoilDirectory("  <table></table>"));
+    assert(!IsOwnfoilDirectory("<html><head><title>Ownfoil</title></head><body><a href='/library/'>Library</a></body></html>"));
+    assert(!IsOwnfoilDirectory("<html><body><form><input type='password'><a href='/'>Home</a></form></body></html>"));
     assert(ParseHtml(html, std::strlen(html), files, error));
     assert(files.size() == 2 && files[0].name == "Example" && files[1].directory && files[1].name == "Folder & Extra");
     assert(!ParseHtml("<a href='00 - ERROR'> </a>", 25, files, error));

@@ -5,6 +5,7 @@
 #include <vector>
 #include <string>
 #include <functional>
+#include <limits>
 #include <unordered_map>
 #include <algorithm>
 #include <stop_token>
@@ -55,6 +56,11 @@ using OnProgress = std::function<bool(s64 dltotal, s64 dlnow, s64 ultotal, s64 u
 using OnUploadCallback = std::function<size_t(void *ptr, size_t size)>;
 using OnUploadSeek = std::function<bool(s64 offset)>;
 using StopToken = std::stop_token;
+
+// Maximum decoded response bytes accepted by ToMemory's write callback.
+struct MemoryLimit {
+    size_t bytes{std::numeric_limits<size_t>::max()};
+};
 
 struct Url {
     Url() = default;
@@ -329,6 +335,7 @@ struct Api {
     auto& GetUploadInfo() const { return m_info; }
     auto& GetOnComplete() const { return m_on_complete; }
     auto& GetOnProgress() const { return m_on_progress; }
+    auto GetMemoryLimit() const { return m_memory_limit.bytes; }
     auto& GetOnUploadSeek() const { return m_on_upload_seek; }
     auto& GetPriority() const { return m_prio; }
     auto& GetToken() const { return m_stoken; }
@@ -348,6 +355,7 @@ struct Api {
     void SetOption(UploadInfo&& v) { m_info = v; }
     void SetOption(OnComplete&& v) { m_on_complete = v; }
     void SetOption(OnProgress&& v) { m_on_progress = v; }
+    void SetOption(MemoryLimit v) { m_memory_limit = v; }
     void SetOption(OnUploadSeek&& v) { m_on_upload_seek = v; }
     void SetOption(Priority&& v) { m_prio = v; }
     void SetOption(StopToken&& v) { m_stoken = v; }
@@ -379,6 +387,7 @@ private:
     UploadInfo m_info{};
     OnComplete m_on_complete{};
     OnProgress m_on_progress{};
+    MemoryLimit m_memory_limit{};
     OnUploadSeek m_on_upload_seek{};
     Priority m_prio{Priority::High};
     std::stop_source m_stop_source{};
