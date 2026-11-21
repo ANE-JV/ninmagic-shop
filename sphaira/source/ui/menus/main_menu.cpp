@@ -53,7 +53,7 @@ auto GetMenuMenuEntries() -> std::span<const MiscMenuEntry> { return SHOP_MENUS;
 MainMenu::MainMenu() {
     // Shop is always the central page; old launcher tab preferences cannot
     // route a fresh installation into unrelated system/file tools.
-    m_centre_menu = std::make_unique<ownfoil::Menu>(MenuFlag_Tab);
+    m_centre_menu = std::make_unique<ownfoil::Menu>(MenuFlag_Tab, [this] { CheckForUpdates(true); });
     m_right_menu = std::make_unique<game::Menu>(MenuFlag_Tab);
     m_current_menu = m_centre_menu.get();
     SetAction(Button::START, Action{"Menú", [this] { ShowShopOptions(); }});
@@ -70,6 +70,11 @@ void MainMenu::ShowCatalog() {
 }
 void MainMenu::ShowShopOptions() {
     auto options = std::make_unique<Sidebar>("NinMagic Shop", "v" APP_VERSION, Sidebar::Side::LEFT);
+    if (m_update_state == UpdateState::Update) {
+        options->Add<SidebarEntryCallback>("Actualizar a " + m_release.version, [this] { ShowUpdateInfo(); }, true);
+    } else {
+        options->Add<SidebarEntryCallback>("Buscar actualización", [this] { CheckForUpdates(true); }, true);
+    }
     options->Add<SidebarEntryCallback>("Tienda", [this] { ShowCatalog(); }, "Vuelve al catálogo del servidor seleccionado.");
     options->Add<SidebarEntryCallback>("Cuenta y servidores", [this] {
         ShowCatalog();
@@ -82,8 +87,6 @@ void MainMenu::ShowShopOptions() {
     options->Add<SidebarEntryCallback>("Opciones de instalación", [] { App::DisplayInstallOptions(); }, "Destino y opciones del instalador.");
     SidebarEntryArray::Items languages{"Automático", "English", "日本語", "Français", "Deutsch", "Italiano", "Español", "简体中文", "한국어", "Nederlands", "Português", "Русский", "繁體中文", "Svenska", "Tiếng Việt", "Українська", "Türkçe", "Magyar"};
     options->Add<SidebarEntryArray>("Idioma", languages, [](s64& index) { App::SetLanguage(index); }, static_cast<s64>(App::GetLanguage()), "Selecciona el idioma de la aplicación.");
-    if (m_update_state == UpdateState::Update) options->Add<SidebarEntryCallback>("Actualizar a " + m_release.version, [this] { ShowUpdateInfo(); }, true, "Lee las novedades antes de instalar el NRO verificado.");
-    options->Add<SidebarEntryCallback>("Buscar actualización", [this] { CheckForUpdates(true); }, true, "Consulta el canal oficial de NinMagic Shop mediante HTTPS verificado.");
     options->Add<SidebarEntryCallback>("Acerca de NinMagic Shop", [] {
         App::Push<OptionBox>("NinMagic Shop v" APP_VERSION "\nCliente Ownfoil basado en Sphaira.\nSelecciona tu servidor y usa tu cuenta personal.\nSoftware libre, licencia GPLv3.", "Aceptar");
     });
@@ -91,27 +94,30 @@ void MainMenu::ShowShopOptions() {
     App::Push(std::move(options));
 }
 void MainMenu::CheckForUpdates(bool show_result) {
-    if (m_update_worker && m_update_state == UpdateState::Pending) { if (show_result) App::Notify("Buscando actualizaciones de NinMagic Shop..."); return; }
+    if (show_result) {
+        m_show_update_result = true;
+        App::Notify("Buscando actualizaciones de NinMagic Shop...");
+    }
+    if (m_update_worker && m_update_state == UpdateState::Pending) return;
     m_update_worker.reset();
     const auto generation = ++m_update_generation;
     const auto token = m_update_stop.get_token();
     m_update_state = UpdateState::Pending;
-    if (show_result) App::Notify("Buscando actualizaciones de NinMagic Shop...");
-    m_update_worker = std::make_unique<utils::Async>([this, generation, token, show_result] {
+    m_update_worker = std::make_unique<utils::Async>([this, generation, token] {
         shop_update::Manifest release; std::string error;
         const bool recovered = shop_update::RecoverInstalled(error);
         const bool checked = recovered && shop_update::Check(release, error, {.cancelled=[token] { return token.stop_requested(); }, .progress={}});
-        evman::push(evman::CallbackEventData{[this, generation, checked, show_result, release=std::move(release), error=std::move(error)]() mutable {
+        evman::push(evman::CallbackEventData{[this, generation, checked, release=std::move(release), error=std::move(error)]() mutable {
             if (generation != m_update_generation) return;
             m_release = std::move(release); m_update_error = std::move(error);
             m_update_state = !checked ? UpdateState::Error : shop_update::IsVersionNewer(APP_VERSION, m_release.version) ? UpdateState::Update : UpdateState::None;
-            if (show_result) ShowUpdateInfo();
-            else if (m_update_state == UpdateState::Update) App::Notify("NinMagic Shop " + m_release.version + " disponible. Abre + Shop para actualizar.");
+            if (std::exchange(m_show_update_result, false)) ShowUpdateInfo();
+            else if (m_update_state == UpdateState::Update) App::Notify("NinMagic Shop " + m_release.version + " disponible. Pulsa + para actualizar.");
         }, token}, false);
     });
     if (!m_update_worker->IsRunning()) {
         m_update_state = UpdateState::Error; m_update_error = "No se pudo iniciar la consulta de actualización.";
-        if (show_result) ShowUpdateInfo();
+        if (std::exchange(m_show_update_result, false)) ShowUpdateInfo();
     }
 }
 void MainMenu::ShowUpdateInfo() {

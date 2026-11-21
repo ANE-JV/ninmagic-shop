@@ -4,17 +4,47 @@
 #include <array>
 #include <cstring>
 #include <string>
+#include <string_view>
+#include <utility>
 
 // A render-only view of the production TitleMenu state. This header deliberately
 // owns no network, installation policy, console API or application lifetime.
 namespace sphaira::ui::shop {
+inline auto DisplayGenre(std::string_view genres) -> std::string {
+    static constexpr std::pair<std::string_view, std::string_view> translations[] = {
+        {"Action", "Acción"}, {"Adventure", "Aventura"}, {"Arcade", "Arcade"}, {"Board Game", "Juego de mesa"},
+        {"Education", "Educativo"}, {"Fighting", "Lucha"}, {"First-Person Shooter", "Disparos en primera persona"},
+        {"Fitness", "Ejercicio"}, {"Lifestyle", "Estilo de vida"}, {"Music", "Música"},
+        {"Multiplayer", "Multijugador"}, {"Party", "Fiesta"}, {"Platformer", "Plataformas"},
+        {"Puzzle", "Puzles"}, {"Racing", "Carreras"}, {"Role-Playing", "Rol"}, {"RPG", "Rol"},
+        {"Shooter", "Disparos"}, {"Simulation", "Simulación"}, {"Sports", "Deportes"},
+        {"Strategy", "Estrategia"}, {"Training", "Entrenamiento"}
+    };
+    std::string result;
+    while (!genres.empty()) {
+        const auto comma = genres.find(',');
+        auto item = genres.substr(0, comma);
+        const auto begin = item.find_first_not_of(" \t");
+        if (begin != std::string_view::npos) {
+            item = item.substr(begin, item.find_last_not_of(" \t") - begin + 1);
+            for (const auto& [source, translated] : translations) {
+                if (item == source) { item = translated; break; }
+            }
+            if (!result.empty()) result += ", ";
+            result += item;
+        }
+        if (comma == std::string_view::npos) break;
+        genres.remove_prefix(comma + 1);
+    }
+    return result;
+}
+
 struct DetailPanelState {
     const char* title{"Selecciona un juego"};
     const char* note{"Marca el contenido que quieres instalar"};
     const char* footer{""};
-    const char* platform{""};
     const char* metadata{""};
-    const char* publisher{""};
+    const char* genre{""};
     const char* description{""};
     int artwork{};
     bool ready{};
@@ -41,8 +71,8 @@ inline void DetailText(NVGcontext* vg, Rect bounds, float size, NVGcolor colour,
     nvgFontFace(vg, bold && nvgFindFont(vg, "ShopBold") >= 0 ? "ShopBold" : "Standard");
     nvgFontSize(vg, size); nvgTextAlign(vg, NVG_ALIGN_LEFT | NVG_ALIGN_TOP);
     nvgFillColor(vg, colour);
-    NVGtextRow rows[3]{};
-    const auto count = nvgTextBreakLines(vg, value, nullptr, bounds.w, rows, std::min(max_lines, 3));
+    NVGtextRow rows[4]{};
+    const auto count = nvgTextBreakLines(vg, value, nullptr, bounds.w, rows, std::min(max_lines, 4));
     for (int i = 0; i < count; ++i) {
         auto line = std::string(rows[i].start, rows[i].end);
         if (i == max_lines - 1 && rows[i].next && *rows[i].next) {
@@ -74,12 +104,17 @@ inline void DrawDetailPanel(NVGcontext* vg, Rect bounds, const DetailPanelState&
     const auto area = [&](float y, float height) -> Rect {
         return {bounds.x + 30.f * sx, bounds.y + y * sy, bounds.w - 50.f * sx, height * sy};
     };
-    Fill(vg, {bounds.x + 17.f * sx, bounds.y + 28.f * sy, 5.f * sx, 30.f * sy}, Cyan, 0.f);
-    DetailText(vg, area(26.f, 62.f), 25.f * scale, White, state.title, 2, true);
-    DetailText(vg, area(98.f, 18.f), 15.f * scale, Cyan, state.platform);
-    DetailText(vg, area(121.f, 18.f), 14.f * scale, White, state.metadata);
-    DetailText(vg, area(144.f, 18.f), 14.f * scale, Muted, state.publisher);
-    DetailText(vg, area(174.f, 38.f), 14.f * scale, White, state.description, 2);
+    Fill(vg, {bounds.x + 17.f * sx, bounds.y + 21.f * sy, 5.f * sx, 29.f * sy}, Cyan, 0.f);
+    DetailText(vg, area(18.f, 60.f), 25.f * scale, White, state.title, 2, true);
+    DetailText(vg, area(82.f, 19.f), 15.f * scale, Muted, state.metadata);
+    if (state.genre && *state.genre) {
+        DetailText(vg, area(106.f, 20.f), 15.f * scale, Cyan, "Género", 1, true);
+        auto genre = area(106.f, 20.f);
+        genre.x += 55.f * sx;
+        genre.w -= 55.f * sx;
+        DetailText(vg, genre, 16.f * scale, White, state.genre);
+    }
+    DetailText(vg, area(134.f, 79.f), 16.f * scale, White, state.description, 4);
     const Rect contents{bounds.x + 16.f * sx, bounds.y + 226.f * sy, bounds.w - 32.f * sx, 119.f * sy};
     Fill(vg, contents, nvgRGBA(3, 12, 24, 160), 8.f);
     Outline(vg, contents, Border, 1.f, 8.f);

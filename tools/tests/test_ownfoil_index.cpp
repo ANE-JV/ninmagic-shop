@@ -150,6 +150,17 @@ int main(int argc, char** argv) {
     assert(ParseArtwork(web_html, std::strlen(web_html), artwork));
     assert(artwork.size() == 1 && artwork[0].id == "0500123456780800");
     assert(artwork[0].icon == "https://cdn.invalid/grid/one.png" && artwork[0].platform == "PlayStation");
+    const auto public_info = R"({"id":"0100123456780000","category":["Puzle",null,"Aventura"],"description":null,"intro":"Recorre el castillo.","icon":"https://example.invalid/icon"})";
+    Artwork title;
+    assert(!ParsePublicTitle(public_info, std::strlen(public_info), "0100123456770000", title));
+    assert(!ParsePublicTitle("<html>", 6, "0100123456780000", title));
+    assert(ParsePublicTitle(public_info, std::strlen(public_info), "0100123456780000", title));
+    assert(title.genre == "Puzle, Aventura" && title.description == "Recorre el castillo." && !title.icon.empty());
+    const auto described = R"({"files":[{"url":"/index [0100123456780000].nsp","genre":"Puzzle","description":"Own synopsis"}]})";
+    assert(Parse(described, std::strlen(described), files, error));
+    const std::vector<Artwork> supplemental{title};
+    ApplyArtwork(files, IndexArtwork(supplemental));
+    assert(files.front().genre == "Puzzle" && files.front().description == "Own synopsis");
     assert(!ParseArtwork("<html>Login required</html>", 27, artwork));
     std::cout << "Ownfoil JSON/HTML/platform/refresh/artwork parser fixtures passed\n";
     if (argc >= 2) {

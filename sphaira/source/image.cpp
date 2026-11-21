@@ -27,6 +27,7 @@
 #endif
 #include <cstring>
 #include <limits>
+#include <memory>
 
 namespace sphaira {
 namespace {
@@ -218,6 +219,34 @@ auto ImageLoadFromFile(const fs::FsPath& file, u32 flags) -> ImageResult {
     }
 }
 
+auto ImageLoadArtworkFile(const fs::FsPath& path, int max_edge) -> ImageResult {
+    fs::FsNativeSd sd;
+    fs::File file;
+    s64 length{};
+    if (max_edge <= 0 || R_FAILED(sd.OpenFile(path, FsOpenMode_Read, &file)) ||
+        R_FAILED(file.GetSize(&length)) || length <= 0 || length > 16 * 1024 * 1024) return {};
+    int w{}, h{}, channels{};
+    size_t decoded_bytes{};
+    constexpr ImageLimits limits{4096, 4 * 1024 * 1024};
+    std::unique_ptr<stbi_uc, decltype(&stbi_image_free)> pixels{nullptr, stbi_image_free};
+    {
+        // SD reads and decompression run on the artwork worker. The grid only
+        // uploads the finished thumbnail, even when the source is a full HD JPEG.
+        std::vector<u8> encoded(static_cast<size_t>(length));
+        u64 read{};
+        if (R_FAILED(file.Read(0, encoded.data(), encoded.size(), FsReadOption_None, &read)) || read != encoded.size() ||
+            !stbi_info_from_memory(encoded.data(), static_cast<int>(length), &w, &h, &channels) ||
+            !ImageDimensionsAllowed(w, h, limits, decoded_bytes)) return {};
+        pixels.reset(stbi_load_from_memory(encoded.data(), static_cast<int>(length), &w, &h, &channels, BPP));
+        if (!pixels || !ImageDimensionsAllowed(w, h, limits, decoded_bytes)) return {};
+    }
+    const int longest = std::max(w, h);
+    if (longest <= max_edge) return {std::vector<u8>(pixels.get(), pixels.get() + decoded_bytes), w, h};
+    const int out_w = std::max(1, w * max_edge / longest);
+    const int out_h = std::max(1, h * max_edge / longest);
+    return ImageResize({pixels.get(), decoded_bytes}, w, h, out_w, out_h);
+}
+
 auto ImageResize(std::span<const u8> data, int inx, int iny, int outx, int outy) -> ImageResult {
     size_t input_size{}, output_size{};
     if (!GetImageSize(inx, iny, BPP, input_size) || !GetImageSize(outx, outy, BPP, output_size) ||
@@ -233,7 +262,7 @@ auto ImageResize(std::span<const u8> data, int inx, int iny, int outx, int outy)
     // if (stbir_resize_uint8(data.data(), inx, iny, inx * BPP, resized_data.data(), outx, outy, outx*BPP, BPP)) {
     if (stbir_resize_uint8_linear(data.data(), inx, iny, inx * BPP, resized_data.data(), outx, outy, outx*BPP, (stbir_pixel_layout)BPP)) {
         log_write("did resize\n");
-        return { resized_data, outx, outy };
+        return { std::move(resized_data), outx, outy };
     }
     log_write("failed resize\n");
     return {};

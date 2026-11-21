@@ -1,5 +1,8 @@
 #include "utils/ownfoil_catalog.hpp"
+#include "utils/ownfoil_browse.hpp"
+#include "ui/shop_navigation.hpp"
 #include <cassert>
+#include <chrono>
 #include <fstream>
 #include <iostream>
 
@@ -11,7 +14,7 @@ int main(int argc, char** argv) {
     std::string error;
     assert(ParseHtml(html, std::strlen(html), files, error));
     const auto metadata = R"({"games":[
-        {"name":"Exact","app_type":"BASE","app_id":"0100123456780000","iconUrl":"https://art.invalid/one.png"},
+        {"name":"Exact","app_type":"BASE","app_id":"0100123456780000","iconUrl":"https://art.invalid/one.png","category":["Acción","Aventura"],"description":"Atraviesa una isla."},
         {"name":"Duplicate","app_type":"BASE","app_id":"0100123456790000"},
         {"name":"Duplicate","app_type":"BASE","app_id":"0100123456800000"},
         {"name":"Almost!","app_type":"BASE","app_id":"0100123456810000"},
@@ -25,9 +28,42 @@ int main(int argc, char** argv) {
     const auto& custom = files.back();
     assert(!retail.directory && retail.source_folder == "Exact/" && retail.id == "0100123456780000");
     assert(retail.extension.empty() && retail.platform == "Nintendo Switch" && retail.icon == "https://art.invalid/one.png");
+    assert(retail.genre == "Acción, Aventura" && retail.description == "Atraviesa una isla.");
     assert(custom.id == "0500123456780800" && custom.title_id == custom.id && custom.platform == "Game Boy Advance");
     assert(!BelongsToGame(custom, custom.id)); // a folder URL is never installed
     assert(files.front().kind == Kind::Unknown && files.front().title_id.empty());
+    using namespace sphaira::ownfoil;
+    api::CatalogQuery browse{};
+    browse.consolidated = true;
+    const BrowseIndex catalog{files};
+    assert(catalog.folder_count == 4 && catalog.mapped_folders == 2);
+    auto results = catalog.Select(files, browse);
+    assert(results.size() == 3);
+    auto second_page = browse;
+    second_page.page = 2;
+    second_page.page_size = 10;
+    assert(browse.SameSelection(second_page));
+    using sphaira::ui::shop::AdjacentPage;
+    assert(!AdjacentPage(0, 3, 30, 5, 2, false, true));
+    const auto down = AdjacentPage(0, 3, 30, 5, 28, true, false);
+    assert(down && down->page == 1 && down->focus == 3);
+    const auto up = AdjacentPage(1, 3, 30, 5, 3, false, true);
+    assert(up && up->page == 0 && up->focus == 28);
+    assert(!AdjacentPage(2, 3, 30, 5, 1, true, false));
+    browse.category = api::Category::Search;
+    assert(!browse.SameSelection(second_page));
+    browse.search = "eXAct";
+    results = catalog.Select(files, browse);
+    assert(results.size() == 1 && !files[results.front()].directory);
+    browse.search = "almost";
+    results = catalog.Select(files, browse);
+    assert(results.size() == 1 && files[results.front()].directory);
+    assert(SearchText("Pokémon Edición") == "pokemon edicion");
+    assert(SearchText("PINGÜINO AÑO Ç À") == "pinguino ano c a");
+    assert(SearchText("逆転") == "逆転");
+    std::stop_source cancelled;
+    cancelled.request_stop();
+    assert(catalog.Select(files, browse, cancelled.get_token()).empty());
     assert(BelongsToGame(files.front(), "0500123456780800"));
     assert(!BelongsToGame(files.front(), "0500123456780000"));
     const auto special = "<table><a href='#Game?/'> </a><a href='File#Part?.nsp'> </a></table>";
@@ -68,6 +104,21 @@ int main(int argc, char** argv) {
         assert(ParseArtwork(art.data(), art.size(), records));
         ApplyArtwork(files, records);
         const auto real = AddGameFolderCards(files, records);
+        const auto start = std::chrono::steady_clock::now();
+        const BrowseIndex live_index{files};
+        api::CatalogQuery live_query{};
+        live_query.consolidated = true;
+        const auto ordered = live_index.Select(files, live_query);
+        const auto indexed = std::chrono::steady_clock::now();
+        live_query.category = api::Category::Search;
+        live_query.search = "mario";
+        const auto hits = live_index.Select(files, live_query);
+        const auto searched = std::chrono::steady_clock::now();
+        for (auto row : hits) assert(SearchText(files[row].name).find(live_query.search) != std::string::npos);
+        std::cout << "Host catalog: ordered=" << ordered.size() << " index/sort_ms="
+            << std::chrono::duration_cast<std::chrono::milliseconds>(indexed-start).count()
+            << " search_matches=" << hits.size() << " search_ms="
+            << std::chrono::duration_cast<std::chrono::milliseconds>(searched-indexed).count() << '\n';
         std::size_t games{}, switch_games{}, covered{};
         std::unordered_set<std::string> unique;
         for (const auto& file : files) if (!file.directory && unique.insert(Key(file)).second) {

@@ -3,6 +3,7 @@
 #include "ui/menus/grid_menu_base.hpp"
 #include "ui/list.hpp"
 #include "ui/scrolling_text.hpp"
+#include "ui/shop_navigation.hpp"
 #include "option.hpp"
 #include "utils/ownfoil.hpp"
 #include "utils/ownfoil_discovery.hpp"
@@ -12,6 +13,7 @@
 
 #include <memory>
 #include <array>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -22,7 +24,7 @@ namespace sphaira::ui::menu::ownfoil {
 struct TitleMenu;
 
 struct Menu final : grid::Menu {
-    Menu(u32 flags);
+    explicit Menu(u32 flags, std::function<void()> check_update = {});
     ~Menu();
 
     auto GetShortTitle() const -> const char* override { return "NinMagic Shop"; }
@@ -62,8 +64,6 @@ private:
         auto operator=(LazyImage&& rhs) noexcept -> LazyImage&;
         ~LazyImage();
         int image{};
-        bool tried_cache{};
-        bool cached{};
         ImageState state{ImageState::None};
     };
 
@@ -101,8 +101,9 @@ private:
     void OnViewChange();
     void CycleView();
     // fetches `page` (0-based) in the background, leaving the page on screen up.
-    void LoadPage(s64 page);
-    void ApplyPage(s64 page, std::vector<sphaira::ownfoil::api::ShopApp>& apps, s64 total);
+    void LoadPage(s64 page, s64 focus = 0);
+    void ApplyPage(s64 page, std::vector<sphaira::ownfoil::api::ShopApp>& apps, s64 total, s64 focus = 0);
+    bool MoveAcrossPage(Controller* controller, TouchInfo* touch);
     auto GetPageMax() -> s64;
     auto BuildQuery(s64 page) -> sphaira::ownfoil::api::CatalogQuery;
     // fills in what only this console can answer. runs on the fetch worker: it
@@ -123,11 +124,13 @@ private:
     void EditProfile(const sphaira::ownfoil::Config& config);
     void ProfileSaved(const sphaira::ownfoil::Config& previous, const sphaira::ownfoil::Config& saved);
     void UpdateProfileActions();
-    auto PlatformChoices() const -> std::vector<std::string>;
+    auto PlatformChoices() const -> const std::vector<std::string>& { return m_platform_choices; }
+    void UpdateCatalogSummary();
     void SelectPlatform(const std::string& platform);
     void ShowServerFolders();
     void ActivateSidebar();
     void UpdatePreview();
+    void RetirePreview();
     auto FindAction(Button button) const -> std::optional<Action>;
     void RestoreAction(Button button, std::optional<Action>& prev);
     void DeleteSelected();
@@ -140,6 +143,7 @@ private:
     static constexpr inline const char* INI_SECTION = "ownfoil";
 
     Mode m_mode{Mode::ServerList};
+    std::function<void()> m_check_update;
     bool m_did_initial_setup{};
 
     sphaira::ownfoil::Configs m_saved{};
@@ -181,6 +185,9 @@ private:
     std::string m_fetch_error{};
     std::vector<Entry> m_entries{};
     std::array<std::unique_ptr<utils::Async>, 2> m_artwork_workers{};
+    std::array<std::unique_ptr<utils::Async>, 2> m_cover_workers{};
+    std::vector<std::string> m_platform_choices{"Nintendo Switch"};
+    sphaira::ownfoil::api::CatalogStatus m_catalog_status{};
     s64 m_entry_index{};
     // m_total is every title the category holds, not this page's worth, and comes
     // back with each page.
@@ -194,7 +201,7 @@ private:
     bool m_refresh_requested{};
     // the one request that arrived mid-fetch; only the newest is worth keeping,
     // since each builds its query when it is finally issued.
-    std::optional<s64> m_pending_page{};
+    std::optional<shop::PageTarget> m_pending_page{};
     std::unique_ptr<utils::Async> m_loader{};
     std::string m_base_url{};
     // artwork the shop serves itself is gated like the catalog, so drawing needs
@@ -207,6 +214,7 @@ private:
     std::optional<Action> m_prev_select{};
     std::optional<Action> m_prev_y{};
     std::shared_ptr<TitleMenu> m_preview{};
+    std::shared_ptr<TitleMenu> m_retired_preview{};
     std::string m_preview_id{};
     u64 m_preview_changed_tick{};
     bool m_sidebar_focus{}, m_detail_focus{};

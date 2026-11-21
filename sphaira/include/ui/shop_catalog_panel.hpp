@@ -17,7 +17,7 @@ struct CatalogPanelState {
     std::vector<CatalogCard> cards;
     std::string platform, heading, location, search, storage, page, empty_text;
     size_t sidebar_index{}, sidebar_offset{};
-    bool sidebar_focused{}, detail_focused{}, loading{};
+    bool sidebar_focused{}, detail_focused{}, loading{}, can_update{true};
 };
 
 inline void CatalogTitle(NVGcontext* vg, Rect card, const std::string& title) {
@@ -63,6 +63,7 @@ inline void DrawCatalogPanel(NVGcontext* vg, const CatalogPanelState& state) {
     Line(vg,38,437,214,437,Alpha(Cyan,.55f));
     Button(vg,layout::Downloads,"Descargas",state.sidebar_focused&&state.sidebar_index==count,false,Icon::Download,true,18);
     Button(vg,layout::Settings,"Ajustes",state.sidebar_focused&&state.sidebar_index==count+1,false,Icon::Settings,true,18);
+    if (state.can_update) Button(vg,layout::UpdateApp,"Actualizar app",state.sidebar_focused&&state.sidebar_index==count+2,false,Icon::Download,true,16);
     Line(vg,38,561,214,561,Alpha(Border,.9f));
     DrawIcon(vg,Icon::Card,39,578,23,Muted);
     nvgSave(vg);nvgIntersectScissor(vg,69,570,146,35);Text(vg,70,590,13,Muted,state.storage.c_str());nvgRestore(vg);

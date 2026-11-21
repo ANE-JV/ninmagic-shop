@@ -20,6 +20,7 @@ enum ImageFlag {
 
 auto ImageLoadFromMemory(std::span<const u8> data, u32 flags = ImageFlag_None) -> ImageResult;
 auto ImageLoadFromFile(const fs::FsPath& file, u32 flags = ImageFlag_None) -> ImageResult;
+auto ImageLoadArtworkFile(const fs::FsPath& path, int max_edge) -> ImageResult;
 auto ImageResize(std::span<const u8> data, int inx, int iny, int outx, int outy) -> ImageResult;
 auto ImageConvertToJpg(std::span<const u8> data, int x, int y) -> ImageResult;
 

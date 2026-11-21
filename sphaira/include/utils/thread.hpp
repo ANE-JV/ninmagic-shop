@@ -26,7 +26,7 @@ struct Async final {
     Async(Callback&& callback) : m_callback{std::forward<Callback>(callback)} {
         m_running = true;
 
-        if (R_FAILED(CreateThread(&m_thread, thread_func, &m_callback))) {
+        if (R_FAILED(CreateThread(&m_thread, thread_func, this))) {
             m_running = false;
             return;
         }
@@ -46,6 +46,10 @@ struct Async final {
         return m_running;
     }
 
+    auto HasFinished() const -> bool {
+        return !m_running || m_finished.load(std::memory_order_acquire);
+    }
+
     void WaitForExit() {
         if (m_running) {
             threadWaitForExit(&m_thread);
@@ -56,13 +60,16 @@ struct Async final {
 
 private:
     static void thread_func(void* arg) {
-        (*static_cast<Callback*>(arg))();
+        auto* worker = static_cast<Async*>(arg);
+        worker->m_callback();
+        worker->m_finished.store(true, std::memory_order_release);
     }
 
 private:
     Callback m_callback;
     Thread m_thread{};
     std::atomic_bool m_running{};
+    std::atomic_bool m_finished{};
 };
 
 } // namespace sphaira::utils

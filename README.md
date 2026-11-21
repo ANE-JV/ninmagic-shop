@@ -1,4 +1,4 @@
-# NinMagic Shop 0.1.3 — beta
+# NinMagic Shop 0.1.4 — beta
 
 Tienda para Nintendo Switch con Atmosphère. Acceso a tu servidor, catálogo con carátulas, búsqueda, favoritos y cola de instalación. Proyecto separado de las demás aplicaciones NinMagic.
 
@@ -6,7 +6,7 @@ Deriva de [Sphaira 1.1.1](https://github.com/NaGaa95/sphaira), cuyo cliente Ownf
 
 ## Instalación
 
-Descarga [NinMagic-Shop-0.1.3.zip](https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/main/releases/0.1.3/NinMagic-Shop-0.1.3.zip) y extráelo en la raíz de la microSD. La aplicación queda en:
+Descarga [NinMagic-Shop-0.1.4.zip](https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/main/releases/0.1.4/NinMagic-Shop-0.1.4.zip) y extráelo en la raíz de la microSD. La aplicación queda en:
 
 ```
 sdmc:/switch/NinMagicShop/NinMagic-Shop.nro
@@ -69,7 +69,7 @@ En API nativa la búsqueda puede consultar el catálogo del servidor. En listado
 
 ## Actualizar NinMagic Shop
 
-Abre **+ → Buscar actualización**. El canal está incorporado y separado de las otras aplicaciones:
+En la versión 0.1.3 pulsa **+**, baja hasta **Buscar actualización** y confirma con **A**. Desde la versión 0.1.4 también puedes elegir **Actualizar app** en la biblioteca. La aplicación consulta este canal:
 
 ```
 https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/main/update.json
@@ -85,6 +85,14 @@ La descarga se fija a un commit de este repositorio y comprueba tamaño, SHA-256
 - `config/NinMagicShop/`: perfiles, preferencias y estado del actualizador.
 
 Los perfiles guardados contienen las credenciales en la microSD. No compartas esa carpeta como parte de un pack público. Los ZIP publicados contienen la aplicación y sus licencias, sin perfiles personales ni juegos.
+
+## Cambios de 0.1.4
+
+- Al bajar por la última fila o subir por la primera, la cuadrícula pasa a la página contigua y conserva la columna cuando hay un juego en ella. ZL y ZR siguen disponibles.
+- La búsqueda de la biblioteca usa un índice reutilizable en los catálogos antiguos y admite nombres con o sin acentos. También encuentra carpetas coincidentes que el servidor aún tiene pendientes de identificar.
+- Las carátulas se descargan, decodifican y reducen en segundo plano. La ficha de la derecha muestra el nombre inmediatamente y completa el género, la descripción y el fondo con los datos disponibles.
+- La tienda y el proveedor configurado tienen prioridad. Para completar fichas e imágenes, la aplicación puede consultar Nlib por el identificador exacto del juego. Las consultas públicas de metadatos se hacen sin credenciales de la tienda.
+- El botón **Actualizar app** está visible en la biblioteca y en **Tus tiendas**. El menú **+** también ofrece la actualización en su primera fila.
 
 ## Cambios de 0.1.3
 

@@ -238,8 +238,9 @@ auto Flatten(const std::string& text) -> std::string {
 
 // runs on the page's worker, so it decodes with stb rather than the hardware jpeg
 // decoder: that is one instance shared with the main thread, and unguarded.
-auto FetchImage(const sphaira::ownfoil::Config& config, const std::string& id, const api::ShopImage& image, const char* kind, std::stop_token token) -> ImageResult {
-    if (image.url.empty()) {
+auto FetchImage(const sphaira::ownfoil::Config& config, const std::string& id, const api::ShopImage& image,
+        const char* kind, int max_edge, std::stop_token token) -> ImageResult {
+    if (image.url.empty() || token.stop_requested()) {
         return {};
     }
 
@@ -247,11 +248,14 @@ auto FetchImage(const sphaira::ownfoil::Config& config, const std::string& id, c
 
     // the cache is keyed on the url, and a url names its bytes, so whatever is
     // already there is the image - unless it is a download that never finished.
+    auto flags = static_cast<unsigned>(curl::Flag_Cache);
     if (!config.revalidate_artwork && fs::FsNativeSd().FileExists(path)) {
-        auto cached = ImageLoadFromFile(path, ImageFlag_None);
+        auto cached = ImageLoadArtworkFile(path, max_edge);
         if (!cached.data.empty()) {
             return cached;
         }
+        // A 304 would keep serving these same undecodable bytes.
+        flags = curl::Flag_None;
     }
 
     // the shop gates its own copies like its catalogue; a hotlink points at a cdn
@@ -261,16 +265,16 @@ auto FetchImage(const sphaira::ownfoil::Config& config, const std::string& id, c
         curl::Path{path},
         curl::UserPass{image.local ? config.user : "", image.local ? config.pass : ""},
         curl::PreemptiveAuth{image.local},
-        curl::Flags{curl::Flag_Cache},
+        curl::Flags{flags},
         curl::StopToken{token},
         curl::OnProgress{[](s64 total, s64 now, s64, s64) { return total <= 16 * 1024 * 1024 && now <= 16 * 1024 * 1024; }}
     );
 
-    if (!result.success) {
+    if (!result.success || token.stop_requested()) {
         return {};
     }
 
-    return ImageLoadFromFile(path, ImageFlag_None);
+    return ImageLoadArtworkFile(path, max_edge);
 }
 
 auto CreateTexture(const ImageResult& image) -> int {
@@ -288,6 +292,20 @@ void DeleteTexture(int image) {
 
 } // namespace
 
+auto LoadShopImage(const sphaira::ownfoil::Config& config, const std::string& artwork_id, const api::ShopImage& image,
+        const char* kind, std::stop_token token) -> ImageResult {
+    const std::string_view use{kind};
+    const bool card = use == "card" || use == "icon";
+    const int max_edge = card ? 256 : use.starts_with("preview") ? 640 : use == "screen" ? 1280 : 1024;
+    auto decoded = FetchImage(config, artwork_id, image, kind, max_edge, token);
+    const bool backdrop = use.starts_with("banner") || use.starts_with("preview");
+    if (!decoded.data.empty() || token.stop_requested() || (!card && !backdrop)) return decoded;
+
+    const auto fallback = api::FallbackArtworkUrl(artwork_id, !card);
+    if (fallback.empty() || fallback == image.url) return {};
+    return FetchImage(config, artwork_id, {fallback, false}, kind, max_edge, token);
+}
+
 auto BuildImageCache(const std::string& app_id, const std::string& url, const char* kind) -> fs::FsPath {
     fs::FsPath path;
     std::snprintf(path, sizeof(path), "%s/%016lx_%s_%016lx.jpg", CACHE_PATH, std::hash<std::string>{}(app_id), kind, std::hash<std::string>{}(url));
@@ -303,6 +321,8 @@ auto MakeTitlePage(const api::ShopApp& app) -> TitlePage {
     page.name = app.name;
     page.publisher = app.publisher;
     page.platform = app.platform;
+    page.genre = app.genre;
+    page.description = app.description;
     page.game_name = app.game_name;
     page.banner = app.banner;
     page.icon = app.icon;
@@ -323,7 +343,8 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
         SetPop();
     }});
 
-    Layout();
+    RefreshDetailText();
+    if (mode == Mode::FullPage) Layout();
 
     // pushed out of sight: the catalog stays on screen until the page can open
     // whole, which Update decides.
@@ -343,7 +364,7 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
 
     // owned by the page rather than fired and forgotten: ~Async joins, and a
     // thread can't join itself.
-    m_loader = std::make_unique<utils::Async>([this, token, send, opened, icon_for_banner](){
+    m_loader = std::make_unique<utils::Async>([this, token, send, opened](){
         api::ShopTitle title{};
         std::string error;
         if (!api::FetchTitle(m_base_url, m_config, token, m_page.id, title, error)) {
@@ -353,17 +374,11 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
                     m_load_error = error;
                     // nothing more is coming from the shop for the page to wait on.
                     m_failed = true;
+                    RefreshDetailText();
                     m_artwork_done = true;
                 });
             }
             return;
-        }
-        if ((!m_page.artwork_id.empty()) && (m_page.platform.empty() || (title.banner.url.empty() && m_page.banner.url.empty()))) {
-            api::ShopApp artwork;
-            if (api::LookupPublicArtwork(m_config.artwork_search_url, m_page.artwork_id, token, artwork)) {
-                title.platform = std::move(artwork.platform);
-                if (title.banner.url.empty() && m_page.banner.url.empty()) { title.banner = artwork.banner; title.full_banner = artwork.banner; }
-            }
         }
         log_write("[OWNFOIL] shop answered for %s after %zums\n", m_page.id.c_str(), opened.GetMs());
 
@@ -398,16 +413,20 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
             m_install_version = std::max<s64>(0, static_cast<s64>(m_title.versions.size()) - 1);
 
             m_loaded = true;
-            BuildFacts();
-            SetImageIndex(m_image_index);
-            Layout();
+            RefreshDetailText();
+            if (m_mode == Mode::FullPage) {
+                BuildFacts();
+                SetImageIndex(m_image_index);
+                Layout();
+            }
         });
 
         // ahead of the screenshots rather than beside them: fetched with them, an
         // uncached banner took ~150ms to download and ~107ms to decode, twice what
         // it takes alone. sent even when nothing was read, since the page waits.
         if (!banner.url.empty()) {
-            auto image = FetchImage(m_config, m_page.id, banner, "banner", token);
+            const auto& artwork_id = m_page.artwork_id.empty() ? m_page.id : m_page.artwork_id;
+            auto image = LoadShopImage(m_config, artwork_id, banner, m_mode == Mode::Preview ? "preview" : "banner", token);
             if (!image.data.empty()) {
                 log_write("[OWNFOIL] banner for %s decoded after %zums\n", m_page.id.c_str(), opened.GetMs());
             }
@@ -426,7 +445,7 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
         // in order, so the thumbnails fill in left to right. these queue behind
         // the title above, so the slot each one lands in already exists.
         for (size_t i = 0; i < screenshots.size() && !token.stop_requested(); i++) {
-            auto image = FetchImage(m_config, m_page.id, screenshots[i], "screenshot", token);
+            auto image = LoadShopImage(m_config, m_page.id, screenshots[i], "screenshot", token);
             if (image.data.empty()) {
                 continue;
             }
@@ -441,7 +460,7 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
         // last, since the rows are the furthest down the page. cached under the
         // same name a dlc card uses, so one the catalog has shown is read back.
         for (size_t i = 0; i < dlc.size() && !token.stop_requested(); i++) {
-            auto image = FetchImage(m_config, dlc[i].app_id, dlc[i].banner, "banner", token);
+            auto image = LoadShopImage(m_config, dlc[i].app_id, dlc[i].banner, "banner", token);
             if (image.data.empty()) {
                 continue;
             }
@@ -458,11 +477,54 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
     // shop's request rather than after it. the card's icon follows it here.
     m_console = std::make_unique<utils::Async>([this, token, send, icon_for_banner](){
         LoadInstalled(token);
+        if (token.stop_requested()) return;
+
+        // Package availability and public editorial data have independent failure modes.
+        // A slow or incomplete package folder must not hold the game description hostage.
+        const auto& artwork_id = m_page.artwork_id.empty() ? m_page.id : m_page.artwork_id;
+        api::ShopApp card{};
+        card.app_id = m_page.id;
+        card.title_id = m_page.game_id;
+        card.artwork_id = artwork_id;
+        card.name = m_page.name;
+        card.platform = m_page.platform;
+        card.genre = m_page.genre;
+        card.description = m_page.description;
+        card.icon = m_page.icon;
+        card.banner = m_page.banner;
+        api::ShopApp presentation{};
+        if (!m_page.dlc && (m_config.json_index || !m_page.artwork_id.empty())
+                && (card.genre.empty() || card.description.empty() || card.banner.url.empty())) {
+            api::LookupGamePresentation(m_config, card, token, presentation);
+        }
+        if (token.stop_requested()) return;
+        const auto backdrop = presentation.banner;
+        send([this, presentation = std::move(presentation)]() mutable {
+            m_presentation = std::move(presentation);
+            m_presentation_done = true;
+            RefreshDetailText();
+            if (m_mode == Mode::FullPage) {
+                BuildFacts();
+                Layout();
+            }
+        });
+        if (!backdrop.url.empty() && backdrop.url != m_page.banner.url) {
+            // The package worker may resolve the same banner concurrently.
+            auto image = LoadShopImage(m_config, artwork_id, backdrop, m_mode == Mode::Preview ? "preview-source" : "banner-source", token);
+            if (!image.data.empty() && !token.stop_requested()) {
+                send([this, image = std::move(image)]() {
+                    m_presentation_artwork = CreateTexture(image);
+                    m_artwork_done = true;
+                });
+                if (m_mode == Mode::Preview) return;
+            }
+        }
+        if (token.stop_requested()) return;
 
         // a page with no banner opens on the card's icon instead, which the grid
         // has usually fetched. sent even when nothing was read, as above.
         if (icon_for_banner) {
-            auto icon = FetchImage(m_config, m_page.id, m_page.icon, "icon", token);
+            auto icon = LoadShopImage(m_config, artwork_id, m_page.icon, "icon", token);
             send([this, icon = std::move(icon)]() {
                 if (!icon.data.empty()) {
                     m_icon = CreateTexture(icon);
@@ -475,7 +537,7 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
         // a dlc names its game beside this icon, which the page doesn't wait for:
         // it can be a download, and on the console one held a page to OPEN_WAIT_MS.
         if (m_page.dlc) {
-            if (auto image = FetchImage(m_config, m_page.id, m_page.icon, "icon", token); !image.data.empty()) {
+            if (auto image = LoadShopImage(m_config, artwork_id, m_page.icon, "icon", token); !image.data.empty()) {
                 send([this, image = std::move(image)]() {
                     m_icon = CreateTexture(image);
                 });
@@ -493,6 +555,7 @@ TitleMenu::~TitleMenu() {
 
     DeleteTexture(m_banner);
     DeleteTexture(m_icon);
+    DeleteTexture(m_presentation_artwork);
     for (const auto image : m_screenshots) {
         DeleteTexture(image);
     }
@@ -533,7 +596,8 @@ void TitleMenu::EnsureSelection() {
 }
 
 void TitleMenu::PollPreview() {
-    if (const auto finished = InstallQueue::Get().GetFinishedCounter(); finished != m_queue_finished) {
+    if (const auto finished = InstallQueue::Get().GetFinishedCounter();
+            finished != m_queue_finished && (!m_console || m_console->HasFinished())) {
         m_queue_finished = finished;
         m_console_loaded = false;
         const auto token = m_stop.get_token();
@@ -638,22 +702,16 @@ void TitleMenu::DrawDetailPanel(NVGcontext* vg, Theme*, const Vec4& bounds, int 
     const auto note = m_failed ? "No se pudo leer el contenido" : !IsReady() ? "Consultando contenido..."
         : m_title.catalog_partial ? "Contenido parcial: revisa los extras"
         : HasSomethingToInstall() ? "Instalar el juego con sus extras" : "Contenido instalado o sin selección";
-    const auto platform = !m_title.platform.empty() ? m_title.platform : m_page.platform;
-    const auto size = m_title.download_size > 0 ? m_title.download_size : m_title.size;
-    auto metadata = size > 0 ? utils::formatSizeStorage(size) : std::string{};
-    if (!m_title.available_display.empty()) {
-        if (!metadata.empty()) metadata += " · ";
-        metadata += "v" + m_title.available_display;
-    }
-    const auto description = m_intro.empty() ? Flatten(m_title.description) : m_intro;
     sphaira::ui::shop::DetailPanelState state;
     state.title = GetName().c_str();
     state.note = note;
-    state.platform = platform.c_str();
-    state.metadata = metadata.c_str();
-    state.publisher = GetPublisher().c_str();
-    state.description = description.c_str();
-    state.artwork = m_banner ? m_banner : m_icon ? m_icon : fallback_artwork;
+    state.metadata = m_detail_metadata.c_str();
+    state.genre = m_detail_genre.c_str();
+    const bool finished = m_presentation_done && (m_config.json_index || m_loaded || m_failed);
+    state.description = !m_detail_description.empty() ? m_detail_description.c_str()
+        : finished ? "Sin descripción disponible" : "Cargando ficha…";
+    state.footer = GetPublisher().c_str();
+    state.artwork = m_banner ? m_banner : m_presentation_artwork ? m_presentation_artwork : fallback_artwork ? fallback_artwork : m_icon;
     state.ready = IsReady();
     state.selected = {m_base_selected, m_update_selected, m_dlc_selected};
     state.available = {DetailActionAvailable(0), DetailActionAvailable(1), DetailActionAvailable(2)};
@@ -661,6 +719,19 @@ void TitleMenu::DrawDetailPanel(NVGcontext* vg, Theme*, const Vec4& bounds, int 
     state.queue_enabled = DetailActionAvailable(4);
     state.focused = m_detail_focused;
     state.action = static_cast<int>(m_detail_action);
+    sphaira::ui::shop::DrawDetailPanel(vg, bounds, state);
+}
+
+void TitleMenu::DrawPreviewSummary(NVGcontext* vg, const Vec4& bounds, const api::ShopApp& app, int fallback_artwork) {
+    sphaira::ui::shop::DetailPanelState state;
+    state.title = app.name.c_str();
+    state.metadata = app.platform.c_str();
+    const auto genre = sphaira::ui::shop::DisplayGenre(app.genre);
+    state.genre = genre.c_str();
+    state.description = app.description.empty() ? "Cargando ficha…" : app.description.c_str();
+    state.footer = app.publisher.c_str();
+    state.artwork = fallback_artwork;
+    state.note = "Consultando contenido…";
     sphaira::ui::shop::DrawDetailPanel(vg, bounds, state);
 }
 
@@ -754,7 +825,8 @@ void TitleMenu::Update(Controller* controller, TouchInfo* touch) {
 }
 
 auto TitleMenu::GetBanner() const -> const api::ShopImage& {
-    return m_title.banner.url.empty() ? m_page.banner : m_title.banner;
+    if (!m_title.banner.url.empty()) return m_title.banner;
+    return m_presentation.banner.url.empty() ? m_page.banner : m_presentation.banner;
 }
 
 auto TitleMenu::GetName() const -> const std::string& {
@@ -762,7 +834,29 @@ auto TitleMenu::GetName() const -> const std::string& {
 }
 
 auto TitleMenu::GetPublisher() const -> const std::string& {
-    return m_title.publisher.empty() ? m_page.publisher : m_title.publisher;
+    if (!m_title.publisher.empty()) return m_title.publisher;
+    return m_presentation.publisher.empty() ? m_page.publisher : m_presentation.publisher;
+}
+
+auto TitleMenu::GetDescription() const -> const std::string& {
+    if (!m_title.description.empty()) return m_title.description;
+    return m_presentation.description.empty() ? m_page.description : m_presentation.description;
+}
+
+void TitleMenu::RefreshDetailText() {
+    m_detail_description = Flatten(GetDescription());
+    if (m_detail_description.empty()) m_detail_description = m_intro;
+    const auto& genre = !m_title.genre.empty() ? m_title.genre : !m_presentation.genre.empty() ? m_presentation.genre : m_page.genre;
+    m_detail_genre = sphaira::ui::shop::DisplayGenre(genre);
+    if (m_detail_genre.empty() && m_presentation_done && (m_config.json_index || m_loaded || m_failed)) m_detail_genre = "Sin catalogar";
+    m_detail_metadata = !m_title.platform.empty() ? m_title.platform : !m_presentation.platform.empty() ? m_presentation.platform : m_page.platform;
+    const auto append = [this](const std::string& value) {
+        if (!m_detail_metadata.empty()) m_detail_metadata += " · ";
+        m_detail_metadata += value;
+    };
+    const auto size = m_title.download_size > 0 ? m_title.download_size : m_title.size;
+    if (size > 0) append(utils::formatSizeStorage(size));
+    if (!m_title.available_display.empty()) append("v" + m_title.available_display);
 }
 
 auto TitleMenu::GetImageCount() const -> s64 {
@@ -772,7 +866,7 @@ auto TitleMenu::GetImageCount() const -> s64 {
 auto TitleMenu::GetImage(s64 index) const -> int {
     if (!GetBanner().url.empty()) {
         if (index == 0) {
-            return m_banner;
+            return m_banner ? m_banner : m_presentation_artwork;
         }
         index--;
     }
@@ -803,7 +897,7 @@ void TitleMenu::BuildFacts() {
     if (!t.release_date.empty()) {
         add("Release date", FormatDate(t.release_date));
     }
-    add("Genre", t.genre);
+    add("Genre", m_detail_genre);
     add("Players", t.players);
     add("Age rating", FormatRating(t.rating, t.region));
 
@@ -871,7 +965,7 @@ void TitleMenu::LoadInstalled(std::stop_token token) {
         MarkInstalled();
 
         // until the shop answers there are no facts for it to join.
-        if (m_loaded) {
+        if (m_loaded && m_mode == Mode::FullPage) {
             BuildFacts();
             Layout();
         }
@@ -910,7 +1004,7 @@ void TitleMenu::Layout() {
 
     // the tagline heads the description, in place of a heading of its own.
     m_intro_h = measure(m_intro, INTRO_SIZE, INTRO_LINE);
-    m_desc_h = measure(m_title.description, TEXT_SIZE, TEXT_LINE);
+    m_desc_h = measure(GetDescription(), TEXT_SIZE, TEXT_LINE);
     if (m_intro_h > 0 || m_desc_h > 0) {
         m_text_y = y + SECTION_GAP;
         m_desc_y = m_text_y + m_intro_h + (m_intro_h > 0 && m_desc_h > 0 ? INTRO_GAP : 0);
@@ -1394,7 +1488,7 @@ void TitleMenu::OpenViewer() {
 
     if (!GetBanner().url.empty()) {
         images.emplace_back(m_title.full_banner.url.empty() ? GetBanner() : m_title.full_banner);
-        previews.emplace_back(m_banner);
+        previews.emplace_back(GetImage(0));
     }
 
     for (size_t i = 0; i < m_screenshots.size() && i < m_title.screenshots.size(); i++) {
@@ -1479,10 +1573,10 @@ void TitleMenu::DrawPage(NVGcontext* vg, Theme* theme) {
         nvgRestore(vg);
     }
 
-    if (!m_title.description.empty() && on_screen(m_desc_y, m_desc_h)) {
+    if (!GetDescription().empty() && on_screen(m_desc_y, m_desc_h)) {
         nvgSave(vg);
         nvgTextLineHeight(vg, TEXT_LINE / TEXT_SIZE);
-        gfx::drawTextBox(vg, PAGE_X, top + m_desc_y, TEXT_SIZE, PAGE_W, theme->GetColour(ThemeEntryID_TEXT), m_title.description.c_str());
+        gfx::drawTextBox(vg, PAGE_X, top + m_desc_y, TEXT_SIZE, PAGE_W, theme->GetColour(ThemeEntryID_TEXT), GetDescription().c_str());
         nvgRestore(vg);
     }
 
@@ -1647,7 +1741,7 @@ void ScreenshotViewer::Show(s64 index) {
     const auto token = m_stop.get_token();
     const auto image = m_images[m_index];
     m_loader = std::make_unique<utils::Async>([this, token, image, index](){
-        auto data = FetchImage(m_config, m_id, image, "screen", token);
+        auto data = LoadShopImage(m_config, m_id, image, "screen", token);
         if (data.data.empty() || token.stop_requested()) {
             return;
         }

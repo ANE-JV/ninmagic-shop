@@ -39,6 +39,8 @@ inline auto AddGameFolderCards(std::vector<File>& files, const std::vector<Artwo
         card.url = folder.url;
         card.source_folder = folder.url;
         card.name = metadata->name.empty() ? folder.name : metadata->name;
+        card.genre = metadata->genre;
+        card.description = metadata->description;
         card.id = metadata->id;
         card.title_id = metadata->id;
         card.kind = Kind::Base;

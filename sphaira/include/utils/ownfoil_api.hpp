@@ -1,6 +1,7 @@
 #pragma once
 
 #include "utils/ownfoil.hpp"
+#include "utils/ownfoil_query.hpp"
 #include <string>
 #include <vector>
 #include <stop_token>
@@ -79,6 +80,8 @@ struct ShopApp {
     std::string title_id{};
     std::string name{};
     std::string publisher{};
+    std::string genre{};
+    std::string description{};
     bool platform_learned{};
     std::string platform{}; // explicit metadata or a recognized folder; empty = unclassified
     std::string game_name{}; // a dlc's game, named on the dlc's page.
@@ -96,43 +99,15 @@ struct ShopApp {
 // credentials are configured. tries local_address first, then remote_address.
 auto Connect(const Config& config, std::stop_token token) -> ConnectResult;
 
-// which slice of the shop a page is drawn from. the console-crossed ones are
-// narrowed by the shop, not by filtering a fetched page: a client-side filter
-// would leave the counter lying and the pages full of holes.
-enum class Category : s64 {
-    All,      // every base game the shop holds.
-    NewGames, // base games this console hasn't installed.
-    Updates,  // updates newer than the one installed for an installed game.
-    Dlc,      // add-ons for installed games that aren't installed.
-    Search,   // base games matching what the user typed.
-    Favorites, // locally saved app IDs, kept separately per server profile.
-};
-
-// what to ask the catalog for: which slice of it, in what order.
-struct CatalogQuery {
-    s64 page{1};      // 1-based, as the shop counts them.
-    s64 page_size{};  // capped at 1000 by the server.
-    Category category{Category::All};
-    // the console's side of the category: New games excludes `app_ids`, Updates
-    // asks for exactly them, DLC looks under `title_ids` and excludes `app_ids`.
-    std::vector<std::string> app_ids{};
-    std::vector<std::string> title_ids{};
-    // the bare term as typed, for Search only; the shop adds the wildcards.
-    std::string search{};
-    std::string platform{}; // empty = all; __unknown__ = unclassified
-    bool consolidated{}; // game cards across the root library, never directories
-    // an OrderField interpolated straight into the query document, so it comes
-    // from a fixed table and never from anything typed in.
-    const char* order_field{"NAME"};
-    bool descending{};
-};
-
 // fetches one page, and `total` for the whole category, which the counter draws.
 auto FetchApps(const std::string& base_url, const Config& config, std::stop_token token, const CatalogQuery& query, std::vector<ShopApp>& out, s64& total, std::string& error) -> bool;
 
 // Available labels in the already-loaded JSON/HTML directory; no network request.
 // Public metadata only: never sends the Ownfoil account or a session cookie.
 auto LookupPublicArtwork(const std::string& provider, const std::string& id, std::stop_token token, ShopApp& out) -> bool;
+// Selected-card metadata only. Public requests carry a title ID, never profile credentials.
+auto LookupGamePresentation(const Config& config, const ShopApp& card, std::stop_token token, ShopApp& out) -> bool;
+auto FallbackArtworkUrl(const std::string& id, bool banner) -> std::string;
 void InvalidateCatalog(const std::string& base_url, const Config& config);
 auto CachedPlatforms(const std::string& base_url, const Config& config) -> std::vector<std::string>;
 struct CatalogStatus {

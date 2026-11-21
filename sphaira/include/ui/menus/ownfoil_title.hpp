@@ -6,6 +6,7 @@
 #include "utils/ownfoil_installed.hpp"
 #include "utils/thread.hpp"
 #include "fs.hpp"
+#include "image.hpp"
 
 #include <functional>
 #include <memory>
@@ -23,6 +24,8 @@ inline constexpr auto CACHE_PATH = "/switch/NinMagicShop/cache/ownfoil";
 // one game, and a shop swaps a hotlink for its own copy as the download lands.
 // both ends mint content-addressed names, so a changed url means changed bytes.
 auto BuildImageCache(const std::string& app_id, const std::string& url, const char* kind) -> fs::FsPath;
+auto LoadShopImage(const sphaira::ownfoil::Config& config, const std::string& artwork_id,
+    const sphaira::ownfoil::api::ShopImage& image, const char* kind, std::stop_token token) -> ImageResult;
 
 // what a page is opened with, so it can draw the name and artwork its card
 // already carried on its first frame rather than wait on the shop.
@@ -35,6 +38,8 @@ struct TitlePage {
     std::string name{};
     std::string publisher{};
     std::string platform{};
+    std::string genre{};
+    std::string description{};
     std::string game_name{}; // a dlc's game.
     sphaira::ownfoil::api::ShopImage banner{};
     // drawn beside the game a dlc needs, and in place of a missing banner.
@@ -90,6 +95,12 @@ struct TitleMenu final : MenuBase, std::enable_shared_from_this<TitleMenu> {
     // One metadata/selection/planner owner for both the full page and the
     // catalog's right pane. Preview polling never consumes catalog controls.
     void PollPreview();
+    static void DrawPreviewSummary(NVGcontext* vg, const Vec4& bounds,
+        const sphaira::ownfoil::api::ShopApp& app, int fallback_artwork);
+    void CancelPreview() { m_stop.request_stop(); }
+    auto PreviewWorkersFinished() const -> bool {
+        return (!m_loader || m_loader->HasFinished()) && (!m_console || m_console->HasFinished());
+    }
     void DrawDetailPanel(NVGcontext* vg, Theme* theme, const Vec4& bounds, int fallback_artwork = 0);
     auto HandleDetailTouch(const TouchInfo* touch) -> bool;
     auto HandleDetailController(Controller* controller) -> bool;
@@ -139,6 +150,8 @@ private:
     auto GetBanner() const -> const sphaira::ownfoil::api::ShopImage&;
     auto GetName() const -> const std::string&;
     auto GetPublisher() const -> const std::string&;
+    auto GetDescription() const -> const std::string&;
+    void RefreshDetailText();
     // the banner, when there is one, then the screenshots; 0 until a decode lands.
     auto GetImageCount() const -> s64;
     auto GetImage(s64 index) const -> int;
@@ -210,6 +223,11 @@ private:
     const TimeStamp m_opened{};
 
     sphaira::ownfoil::api::ShopTitle m_title{};
+    sphaira::ownfoil::api::ShopApp m_presentation{};
+    bool m_presentation_done{};
+    std::string m_detail_genre{};
+    std::string m_detail_metadata{};
+    std::string m_detail_description{};
     bool m_loaded{}; // the shop has answered for m_title.
     bool m_failed{}; // the shop won't answer: its error has been shown instead.
     // what this console holds, answered on a thread of its own, before the shop
@@ -224,6 +242,7 @@ private:
 
     int m_banner{};
     int m_icon{};
+    int m_presentation_artwork{};
     // the artwork the page opens on has landed, or failed to: its own banner,
     // fetched once the shop names it, or the card's icon standing in for one.
     bool m_artwork_done{};

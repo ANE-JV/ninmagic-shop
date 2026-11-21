@@ -93,8 +93,6 @@ Menu::LazyImage::LazyImage(LazyImage&& rhs) noexcept {
 
 auto Menu::LazyImage::operator=(LazyImage&& rhs) noexcept -> LazyImage& {
     std::swap(image, rhs.image);
-    std::swap(tried_cache, rhs.tried_cache);
-    std::swap(cached, rhs.cached);
     std::swap(state, rhs.state);
     return *this;
 }
@@ -105,7 +103,8 @@ Menu::LazyImage::~LazyImage() {
     }
 }
 
-Menu::Menu(u32 flags) : grid::Menu{"NinMagic Shop", flags} {
+Menu::Menu(u32 flags, std::function<void()> check_update)
+: grid::Menu{"NinMagic Shop", flags}, m_check_update{std::move(check_update)} {
     SetShopLayout();
     SetShopAccountAction([this] { if (m_mode == Mode::Home) ShowServerProfiles(); else ShowOptions(); });
     // B leaves the menu from the catalog too: the server list is reached from
@@ -274,12 +273,11 @@ void Menu::FreeEntries() {
     // which hands the four download threads to the page arriving rather than
     // making it wait out a screenful of artwork nobody will see.
     m_page_stop.request_stop();
-    for (auto& worker : m_artwork_workers) worker.reset();
     m_page_stop = std::stop_source{};
     m_loading = false;
     m_entries.clear();
     m_entry_index = 0;
-    m_preview.reset();
+    RetirePreview();
     m_preview_id.clear();
     m_preview_changed_tick = armGetSystemTick();
     m_detail_focus = false;
@@ -290,7 +288,7 @@ void Menu::CycleView() {
     OnViewChange();
 }
 
-auto Menu::PlatformChoices() const -> std::vector<std::string> {
+void Menu::UpdateCatalogSummary() {
     const auto available = sphaira::ownfoil::api::CachedPlatforms(m_base_url, m_config);
     std::vector<std::string> choices{"Nintendo Switch"};
     for (const auto& label : available) if (!label.empty() && std::find(choices.begin(), choices.end(), label) == choices.end()) choices.push_back(label);
@@ -298,7 +296,8 @@ auto Menu::PlatformChoices() const -> std::vector<std::string> {
         const auto& label = entry.app.platform;
         if (!entry.app.directory && !label.empty() && std::find(choices.begin(), choices.end(), label) == choices.end()) choices.push_back(label);
     }
-    return choices;
+    m_platform_choices = std::move(choices);
+    m_catalog_status = sphaira::ownfoil::api::CachedCatalogStatus(m_base_url, m_config);
 }
 void Menu::SelectPlatform(const std::string& platform) {
     m_platform = platform;
@@ -337,17 +336,25 @@ void Menu::ActivateSidebar() {
     if (m_sidebar_index < choices.size()) {
         SelectPlatform(choices[m_sidebar_index]);
     } else if (m_sidebar_index == choices.size()) InstallQueue::Get().ShowMenu();
-    else ShowOptions();
+    else if (m_sidebar_index == choices.size() + 1) ShowOptions();
+    else if (m_check_update) m_check_update();
 }
+void Menu::RetirePreview() {
+    if (!m_preview) return;
+    if (m_preview.use_count() == 1) m_preview->CancelPreview();
+    m_retired_preview = std::move(m_preview);
+}
+
 void Menu::UpdatePreview() {
+    if (m_retired_preview && m_retired_preview->PreviewWorkersFinished()) m_retired_preview.reset();
     if (m_mode != Mode::Home || m_entry_index < 0 || m_entry_index >= static_cast<s64>(m_entries.size())) return;
     const auto& selected = m_entries[m_entry_index].app;
     const auto identity = m_base_url + "|" + selected.app_id + "|" + selected.download.url + "|" + selected.name;
     if (identity != m_preview_id) {
-        m_preview.reset(); m_preview_id = identity; m_preview_changed_tick = armGetSystemTick();
+        RetirePreview(); m_preview_id = identity; m_preview_changed_tick = armGetSystemTick();
     }
     if (selected.directory) return;
-    if (!m_preview && armTicksToNs(armGetSystemTick() - m_preview_changed_tick) >= 200000000ULL)
+    if (!m_preview && !m_retired_preview && armTicksToNs(armGetSystemTick() - m_preview_changed_tick) >= 160000000ULL)
         m_preview = std::make_shared<TitleMenu>(m_config, m_base_url, MakeTitlePage(selected), TitleMenu::Mode::Preview);
     if (m_preview) m_preview->PollPreview();
 }
@@ -360,8 +367,39 @@ void Menu::OnViewChange() {
     m_list->SetScrollBarPos(shop::layout::GridScrollX, shop::layout::GridScrollY, shop::layout::GridScrollHeight);
 }
 
+bool Menu::MoveAcrossPage(Controller* controller, TouchInfo* touch) {
+    constexpr s64 columns = shop::layout::Columns;
+    const auto count = static_cast<s64>(m_entries.size());
+    const auto last_row = (count - 1) / columns;
+    bool forward = controller->GotDown(Button::DOWN) && m_entry_index / columns == last_row;
+    bool backward = controller->GotDown(Button::UP) && m_entry_index < columns;
+    if (touch->is_end && touch->initial.x >= GRID_POS.x && touch->initial.x < GRID_POS.x + GRID_POS.w
+        && touch->initial.y >= GRID_POS.y && touch->initial.y < GRID_POS.y + GRID_POS.h) {
+        const auto distance = static_cast<float>(touch->initial.y) - static_cast<float>(touch->cur.y);
+        constexpr s64 visible_rows = shop::layout::VisibleCards / columns;
+        const auto bottom = std::max<s64>(0, last_row + 1 - visible_rows) * m_list->GetMaxY();
+        forward = distance >= 48.f && m_list->GetYoff() >= bottom - 1.f;
+        backward = distance <= -48.f && m_list->GetYoff() < 1.f;
+        if (forward || backward) {
+            // Finish the gesture before resetting its viewport on a new page.
+            m_list->OnUpdate(controller, touch, m_entry_index, count, [](bool, s64) {});
+        }
+    }
+    if (!forward && !backward) return false;
+    const auto target = shop::AdjacentPage(m_page, GetPageMax(), m_page_size.Get(), columns, m_entry_index, forward, backward);
+    if (!target) return false;
+    if (!m_loading && !m_pending_page) LoadPage(target->page, target->focus);
+    return true;
+}
+
 void Menu::Update(Controller* controller, TouchInfo* touch) {
+    if (m_mode == Mode::Home && !m_loading && m_pending_page && (!m_loader || m_loader->HasFinished())) {
+        const auto next = *m_pending_page;
+        m_pending_page.reset();
+        LoadPage(next.page, next.focus);
+    }
     if (m_mode == Mode::ServerList && touch->is_clicked) {
+        if (m_check_update && touch->in_range(ToVec4(shop::layout::ProfileUpdate))) { m_check_update(); return; }
         if (touch->in_range(Vec4{49.f, 176.f, 214.f, 42.f})) { AddServer(); return; }
         if (touch->in_range(Vec4{49.f, 228.f, 214.f, 42.f})) { EditSelected(); return; }
     }
@@ -387,6 +425,7 @@ void Menu::Update(Controller* controller, TouchInfo* touch) {
             }
             if (touch->in_range(ToVec4(shop::layout::Downloads))) { InstallQueue::Get().ShowMenu(); return; }
             if (touch->in_range(ToVec4(shop::layout::Settings))) { ShowOptions(); return; }
+            if (m_check_update && touch->in_range(ToVec4(shop::layout::UpdateApp))) { m_check_update(); return; }
         }
         const auto platform_viewport = shop::layout::PlatformViewport;
         if (touch->is_end && touch->initial.x >= platform_viewport.x && touch->initial.x <= platform_viewport.x + platform_viewport.w
@@ -410,7 +449,7 @@ void Menu::Update(Controller* controller, TouchInfo* touch) {
     MenuBase::Update(controller, touch);
     if (m_mode == Mode::Home) {
         if (m_sidebar_focus) {
-            const auto count = PlatformChoices().size() + 2;
+            const auto count = PlatformChoices().size() + (m_check_update ? 3 : 2);
             if (controller->GotDown(Button::UP)) m_sidebar_index = (m_sidebar_index + count - 1) % count;
             if (controller->GotDown(Button::DOWN)) m_sidebar_index = (m_sidebar_index + 1) % count;
             if (controller->GotDown(Button::RIGHT)) m_sidebar_focus = false;
@@ -418,7 +457,7 @@ void Menu::Update(Controller* controller, TouchInfo* touch) {
             Controller navigation = *controller;
             navigation.Set(Button::A, false); navigation.Set(Button::B, false);
             m_detail_focus = m_preview->HandleDetailController(&navigation);
-        } else if (!m_entries.empty()) {
+        } else if (!m_entries.empty() && !MoveAcrossPage(controller, touch)) {
             m_list->OnUpdate(controller, touch, m_entry_index, m_entries.size(), [this](bool tapped, s64 index) {
                 if (tapped && m_entry_index == index) OpenSelected();
                 else { m_entry_index = index; m_sidebar_focus = false; m_detail_focus = false; }
@@ -492,6 +531,7 @@ void Menu::Draw(NVGcontext* vg, Theme* theme) {
     shop::Text(vg, 49.f, 472.f, 15.f, shop::White, "A  Conectar tienda");
     shop::Text(vg, 49.f, 503.f, 15.f, shop::White, "X  Añadir tienda");
     shop::Text(vg, 49.f, 534.f, 15.f, shop::White, "Y  Editar selección");
+    if (m_check_update) shop::Button(vg,shop::layout::ProfileUpdate,"Actualizar app",false,false,shop::Icon::Download,true,17.f);
     shop::Text(vg, 298.f, 129.f, 31.f, shop::White, "Tus tiendas", NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE, true);
     shop::Text(vg, 299.f, 157.f, 17.f, shop::Muted, "Selecciona un perfil para conectar o editar sus datos");
     shop::Panel(vg, {296.f, 178.f, 906.f, 432.f}, shop::Border);
@@ -522,6 +562,7 @@ void Menu::Draw(NVGcontext* vg, Theme* theme) {
 
 void Menu::DrawHome(NVGcontext* vg, Theme* theme) {
     shop::CatalogPanelState state;
+    state.can_update = static_cast<bool>(m_check_update);
     state.platforms = PlatformChoices();
     if (m_sidebar_index < state.platforms.size()) {
         if (m_sidebar_index < m_sidebar_offset) m_sidebar_offset = m_sidebar_index;
@@ -537,8 +578,8 @@ void Menu::DrawHome(NVGcontext* vg, Theme* theme) {
     else if (!m_config.name.empty()) state.location += "  /  " + m_config.name;
     state.search = m_search;
     state.storage = m_sd_free >= 0 ? "microSD · " + utils::formatSizeStorage(m_sd_free) + " libres" : "microSD";
-    state.page = m_fetch_error.empty() ? "ZL / ZR · Página " + std::to_string(m_page + 1) + " / " + std::to_string(GetPageMax()) : "No se pudo cargar · − Opciones para reintentar";
-    const auto catalog_status = sphaira::ownfoil::api::CachedCatalogStatus(m_base_url, m_config);
+    state.page = m_fetch_error.empty() ? "Página " + std::to_string(m_page + 1) + " / " + std::to_string(GetPageMax()) + " · ZL / ZR" : "No se pudo cargar · − Opciones para reintentar";
+    const auto& catalog_status = m_catalog_status;
     if (catalog_status.partial && m_fetch_error.empty()) state.page += " · Parcial: " + std::to_string(catalog_status.unresolved_folders) + " carpetas sin identificar";
     state.loading = m_loading;
     state.empty_text = !m_fetch_error.empty() ? "No se pudo cargar esta selección" : m_search.empty() ? "No hay juegos en esta selección" : "No hay resultados para esta búsqueda";
@@ -552,11 +593,13 @@ void Menu::DrawHome(NVGcontext* vg, Theme* theme) {
             entry.icon.state == ImageState::Progress || entry.banner.state == ImageState::Progress, index == m_entry_index, shop::Rect{bounds}});
     });
     shop::DrawCatalogPanel(vg, state);
+    int selected_image{};
+    for (const auto& card : state.cards) if (card.selected) { selected_image = card.image; break; }
     if (m_preview) {
-        int selected_image{};
-        for (const auto& card : state.cards) if (card.selected) { selected_image = card.image; break; }
         m_preview->SetDetailFocused(m_detail_focus);
         m_preview->DrawDetailPanel(vg, theme, DETAIL_PANEL, selected_image);
+    } else if (!m_entries.empty() && !m_entries[m_entry_index].app.directory) {
+        TitleMenu::DrawPreviewSummary(vg, DETAIL_PANEL, m_entries[m_entry_index].app, selected_image);
     } else {
         shop::Panel(vg, DETAIL_PANEL, shop::Violet);
         const auto center = DETAIL_PANEL.x + DETAIL_PANEL.w * .5f;
@@ -571,128 +614,70 @@ void Menu::QueuePublicArtwork(Entry& entry) {
     if (entry.artwork_tried || entry.app.directory || m_config.artwork_search_url.empty()
         || entry.app.artwork_id.empty() || (!entry.app.platform.empty() && !entry.app.icon.url.empty())) return;
     size_t slot{};
-    while (slot < m_artwork_workers.size() && m_artwork_workers[slot]) ++slot;
+    while (slot < m_artwork_workers.size() && m_artwork_workers[slot] && !m_artwork_workers[slot]->HasFinished()) ++slot;
     if (slot == m_artwork_workers.size()) return;
     entry.artwork_tried = true;
     const auto index = &entry - m_entries.data();
     const auto id = entry.app.artwork_id;
     const auto provider = m_config.artwork_search_url;
     const auto token = m_page_stop.get_token();
-    m_artwork_workers[slot] = std::make_unique<utils::Async>([this, index, id, provider, token, slot] {
+    m_artwork_workers[slot] = std::make_unique<utils::Async>([this, index, id, provider, token] {
         sphaira::ownfoil::api::ShopApp artwork;
         const auto found = sphaira::ownfoil::api::LookupPublicArtwork(provider, id, token, artwork);
-        evman::push(evman::CallbackEventData{[this, index, slot, found, artwork = std::move(artwork)]() mutable {
-            m_artwork_workers[slot].reset();
+        evman::push(evman::CallbackEventData{[this, index, found, artwork = std::move(artwork)]() mutable {
             if (!found || index < 0 || index >= static_cast<s64>(m_entries.size())) return;
             auto& entry = m_entries[index];
+            if (entry.app.genre.empty()) entry.app.genre = std::move(artwork.genre);
+            if (entry.app.description.empty()) entry.app.description = std::move(artwork.description);
             if (entry.app.icon.url.empty() && !artwork.icon.url.empty()) { entry.app.icon = std::move(artwork.icon); entry.icon.state = ImageState::None; }
             if (entry.app.banner.url.empty() && !artwork.banner.url.empty()) { entry.app.banner = std::move(artwork.banner); entry.banner.state = ImageState::None; }
             if ((entry.app.platform.empty() || entry.app.platform_learned) && !artwork.platform.empty()) {
                 entry.app.platform = std::move(artwork.platform);
                 entry.app.platform_learned = true;
+                if (std::find(m_platform_choices.begin(), m_platform_choices.end(), entry.app.platform) == m_platform_choices.end())
+                    m_platform_choices.push_back(entry.app.platform);
             }
         }, token}, false);
     });
     if (!m_artwork_workers[slot]->IsRunning()) m_artwork_workers[slot].reset();
 }
 
-auto Menu::GetImage(Entry& e, bool banner, int& budget) -> int {
-    QueuePublicArtwork(e);
-    auto& image = banner ? e.banner : e.icon;
-    const auto& src = banner ? e.app.banner : e.app.icon;
-    const auto& url = src.url;
+auto Menu::GetImage(Entry& entry, bool banner, int& budget) -> int {
+    QueuePublicArtwork(entry);
+    auto& image = banner ? entry.banner : entry.icon;
+    if (image.state != ImageState::None || budget <= 0) return image.image;
 
-    if (image.image) {
-        return image.image;
-    }
+    const auto slot = std::find_if(m_cover_workers.begin(), m_cover_workers.end(),
+        [](const auto& worker) { return !worker || worker->HasFinished(); });
+    if (slot == m_cover_workers.end()) return 0;
 
-    // a title the catalog has no artwork for is never going to gain any.
-    if (url.empty()) {
-        image.state = ImageState::Failed;
-        return App::GetDefaultImage();
-    }
-
-    if (image.state == ImageState::Failed) {
-        return App::GetDefaultImage();
-    }
-
-    // this runs per visible entry per frame, so bail before hashing a cache path
-    // that won't be used.
-    if (image.state == ImageState::Progress) {
-        return 0;
-    }
-
-    if (budget <= 0) {
-        return 0;
-    }
-
-    const auto path = BuildImageCache(e.app.app_id, url, banner ? "banner" : "icon");
-
-    const auto load = [&]() -> bool {
-        const auto data = ImageLoadFromFile(path, ImageFlag_None);
-        if (data.data.empty()) {
-            return false;
-        }
-        image.image = nvgCreateImageRGBA(App::GetVg(), data.w, data.h, 0, data.data.data());
-        return image.image != 0;
-    };
-
-    // whatever is already on the sd card is worth a look before the network.
-    if (!image.tried_cache) {
-        image.tried_cache = true;
-        image.cached = load();
-        if (image.cached) {
-            // only a real decode is worth charging against the frame's budget.
-            budget--;
-            return image.image;
-        }
-    }
-
-    switch (image.state) {
-        case ImageState::None: {
-            image.state = ImageState::Progress;
-            const auto index = &e - m_entries.data();
-
-            // the shop gates its own artwork like its catalogue, so its copies
-            // need credentials; a hotlink points at a cdn that must not get them.
-            const auto user = src.local ? m_config.user : "";
-            const auto pass = src.local ? m_config.pass : "";
-
-            const auto queued = curl::Api().ToFileAsync(
-                curl::Url{url},
-                curl::Path{path},
-                curl::UserPass{user, pass},
-                curl::PreemptiveAuth{src.local},
-                curl::Flags{curl::Flag_Cache},
-                curl::StopToken{m_page_stop.get_token()},
-                curl::OnProgress{[](s64 total, s64 now, s64, s64) { return total <= 16 * 1024 * 1024 && now <= 16 * 1024 * 1024; }},
-                curl::OnComplete{[this, index, banner](auto& result) {
-                    // entries never move while a page is up, and leaving one stops
-                    // the token this carries, so the index names the same title.
-                    auto& entry = m_entries[index];
-                    auto& done = banner ? entry.banner : entry.icon;
-                    done.state = result.success ? ImageState::Done : ImageState::Failed;
-                }}
-            );
-
-            if (!queued) {
-                image.state = ImageState::Failed;
+    const auto token = m_page_stop.get_token();
+    const auto index = static_cast<size_t>(&entry - m_entries.data());
+    const auto& src = banner ? entry.app.banner : entry.app.icon;
+    const auto& id = entry.app.artwork_id.empty() ? entry.app.app_id : entry.app.artwork_id;
+    image.state = ImageState::Progress;
+    --budget;
+    *slot = std::make_unique<utils::Async>([this, token, index, banner, src, id, config = m_config] {
+        auto pixels = LoadShopImage(config, id, src, "card", token);
+        if (token.stop_requested()) return;
+        evman::push(evman::CallbackEventData{[this, index, banner, url = src.url, pixels = std::move(pixels)] {
+            if (index >= m_entries.size()) return;
+            auto& target = m_entries[index];
+            // The public provider can supply a better image while the first
+            // request is running. Its newer URL owns the card from that point.
+            if ((banner ? target.app.banner : target.app.icon).url != url) return;
+            auto& thumbnail = banner ? target.banner : target.icon;
+            if (!pixels.data.empty()) {
+                const auto replacement = nvgCreateImageRGBA(App::GetVg(), pixels.w, pixels.h, 0, pixels.data.data());
+                if (replacement) {
+                    if (thumbnail.image) nvgDeleteImage(App::GetVg(), thumbnail.image);
+                    thumbnail.image = replacement;
+                }
             }
-        }   break;
-
-        case ImageState::Done: {
-            if (load()) {
-                budget--;
-            } else {
-                image.state = ImageState::Failed;
-            }
-        }   break;
-
-        case ImageState::Progress:
-        case ImageState::Failed:
-            break;
-    }
-
+            thumbnail.state = thumbnail.image ? ImageState::Done : ImageState::Failed;
+        }, token}, false);
+    });
+    if (!(*slot)->IsRunning()) image.state = ImageState::Failed;
     return image.image;
 }
 
@@ -738,6 +723,9 @@ void Menu::EnterDirectory(const sphaira::ownfoil::api::ShopApp& app) {
     }
     m_directory_stack.push_back(m_base_url);
     m_consolidated = false;
+    m_category = 0;
+    m_search.clear();
+    m_platform.clear();
     m_folder_names.push_back(app.name);
     m_base_url = app.download.url;
     FreeEntries();
@@ -1163,13 +1151,13 @@ auto Menu::PrepareQuery(sphaira::ownfoil::api::CatalogQuery& query, const std::s
     return true;
 }
 
-void Menu::LoadPage(s64 page) {
+void Menu::LoadPage(s64 page, s64 focus) {
     // the page on screen stays up until the next lands, with no modal: a fetch is
     // a few tens of milliseconds, and a dialog that appears and vanishes inside
     // that reads as slower than none. a request arriving meanwhile is held rather
     // than dropped, since `Order` can be flipped faster than the shop answers.
-    if (m_loading) {
-        m_pending_page = page;
+    if (m_loading || (m_loader && !m_loader->HasFinished())) {
+        m_pending_page = shop::PageTarget{page, focus};
         return;
     }
 
@@ -1191,7 +1179,7 @@ void Menu::LoadPage(s64 page) {
 
     // owned by the menu rather than fired and forgotten: ~Async joins, and a
     // thread can't join itself.
-    m_loader = std::make_unique<utils::Async>([this, config, base_url, query, page, token](){
+    m_loader = std::make_unique<utils::Async>([this, config, base_url, query, page, focus, token](){
         // the result travels with the event rather than through a member: no
         // dialog is holding the main thread off one this time.
         std::vector<sphaira::ownfoil::api::ShopApp> apps;
@@ -1203,14 +1191,14 @@ void Menu::LoadPage(s64 page) {
         }
 
         evman::push(evman::CallbackEventData{
-            [this, page, total, apps = std::move(apps), error = std::move(error)]() mutable {
+            [this, page, focus, total, apps = std::move(apps), error = std::move(error)]() mutable {
                 if (!error.empty()) {
                     m_loading = false;
                     m_fetch_error = error;
                     App::Notify(m_config.name + ": " + error);
                 } else {
                     // ApplyPage clears the flag by way of FreeEntries.
-                    ApplyPage(page, apps, total);
+                    ApplyPage(page, apps, total, focus);
                 }
 
                 // whatever was asked for mid-flight, issued now against the
@@ -1218,15 +1206,19 @@ void Menu::LoadPage(s64 page) {
                 if (m_pending_page) {
                     const auto next = *m_pending_page;
                     m_pending_page.reset();
-                    LoadPage(next);
+                    LoadPage(next.page, next.focus);
                 }
             },
             token
         }, false);
     });
+    if (!m_loader->IsRunning()) {
+        m_loading = false;
+        m_fetch_error = "No se pudo iniciar la lectura del catálogo.";
+    }
 }
 
-void Menu::ApplyPage(s64 page, std::vector<sphaira::ownfoil::api::ShopApp>& apps, s64 total) {
+void Menu::ApplyPage(s64 page, std::vector<sphaira::ownfoil::api::ShopApp>& apps, s64 total, s64 focus) {
     m_page = page;
     m_total = total;
     m_fetch_error.clear();
@@ -1236,14 +1228,15 @@ void Menu::ApplyPage(s64 page, std::vector<sphaira::ownfoil::api::ShopApp>& apps
     for (auto& app : apps) {
         Entry entry{};
         entry.app = std::move(app);
-        entry.icon.tried_cache = entry.banner.tried_cache = m_config.revalidate_artwork;
         m_entries.emplace_back(std::move(entry));
     }
     apps.clear();
 
-    // a fresh page starts at the top.
-    m_entry_index = 0;
-    m_list->SetYoff(0);
+    UpdateCatalogSummary();
+    m_entry_index = std::clamp<s64>(focus, 0, std::max<s64>(0, static_cast<s64>(m_entries.size()) - 1));
+    constexpr s64 columns = shop::layout::Columns;
+    constexpr s64 rows = shop::layout::VisibleCards / columns;
+    m_list->SetYoff(std::max<s64>(0, m_entry_index / columns - rows + 1) * m_list->GetMaxY());
     m_banner_name.Reset();
     m_banner_publisher.Reset();
 
@@ -1334,19 +1327,24 @@ void Menu::ShowSearch(s64 index) {
 
     // the term on screen is the initial text: narrowing a search that came back
     // too wide is far more common than starting an unrelated one.
-    const auto search_hint = m_consolidated ? (m_platform.empty() ? "Nombre o ID · toda la biblioteca" : "Nombre o ID · consola actual") : m_config.legacy_html ? "Nombre o parte del nombre · carpeta actual" : m_config.json_index ? "Nombre o ID · índice actual" : "Nombre o ID · todo el catálogo";
-    if (R_FAILED(swkbd::ShowText(term, "Buscar juego", search_hint, m_search.c_str(), 1, SEARCH_MAX)) || term.empty()) {
+    if (R_FAILED(swkbd::ShowText(term, "Buscar juego", "Nombre o ID · toda la biblioteca", m_search.c_str(), 1, SEARCH_MAX)) || term.empty()) {
         // backing out of the keyboard leaves the catalog that was up, up.
         return;
     }
 
     // the same term against the same catalog would come back the same.
-    if (index == m_category && term == m_search) {
+    if (index == m_category && term == m_search && m_platform.empty() && m_directory_stack.empty() && m_consolidated) {
         return;
     }
 
     m_search = term;
     m_category = index;
+    if (!m_directory_stack.empty()) m_base_url = m_directory_stack.front();
+    m_directory_stack.clear();
+    m_folder_names.clear();
+    m_consolidated = true;
+    m_platform.clear();
+    m_sidebar_focus = m_detail_focus = false;
     if (!m_base_url.empty() && !m_connecting) {
         FreeEntries();
         m_pending_page.reset();
@@ -1359,6 +1357,7 @@ void Menu::ShowSearch(s64 index) {
 void Menu::ShowOptions() {
     auto options = std::make_unique<Sidebar>("Options"_i18n, Sidebar::Side::RIGHT);
     ON_SCOPE_EXIT(App::Push(std::move(options)));
+    if (m_check_update) options->Add<SidebarEntryCallback>("Buscar actualización de la app", m_check_update, true);
     if (m_mode == Mode::Home && !m_config.uid.empty()) {
         options->Add<SidebarEntryCallback>("Editar tienda actual", [this] { EditCurrent(); }, true,
             "Cambia la URL, el puerto, la ruta o el acceso de esta tienda y vuelve a conectar.");

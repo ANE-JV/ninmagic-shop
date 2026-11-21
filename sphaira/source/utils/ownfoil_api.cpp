@@ -2,6 +2,7 @@
 #include "utils/ownfoil_index.hpp"
 #include "utils/ownfoil_diagnostic.hpp"
 #include "utils/ownfoil_catalog.hpp"
+#include "utils/ownfoil_browse.hpp"
 
 #include "download.hpp"
 #include "defines.hpp"
@@ -284,29 +285,29 @@ struct DetailIndexCache { IndexCache catalog; std::size_t bytes{}; };
 std::unordered_map<std::string, DetailIndexCache> g_detail_index_cache;
 enum class IndexScope { Catalog, GameFolder };
 std::mutex g_platform_mutex;
-std::unordered_map<std::string, std::string> g_learned_platforms;
+std::unordered_map<std::string, index::BrowseIndex::PlatformsById> g_learned_platforms;
+size_t g_learned_count{};
+std::uint64_t g_learned_revision{};
 
 void LearnPlatform(const std::string& provider, const std::string& id, const std::string& platform) {
     if (platform.empty()) return;
-    {
-        std::scoped_lock lock(g_platform_mutex);
-        if (g_learned_platforms.size() >= 32768) g_learned_platforms.clear();
-        g_learned_platforms[provider + '#' + id] = platform;
-    }
-    std::scoped_lock lock(g_index_mutex);
-    if (!g_index_cache.files) return;
-    const auto matches = [&](const auto& file) { return file.id == id && (file.platform.empty() || file.platform_learned) && file.platform != platform; };
-    if (std::none_of(g_index_cache.files->begin(), g_index_cache.files->end(), matches)) return;
-    // Readers retain the prior immutable snapshot while the session learns a
-    // console; no network crawl is needed and no reader sees a partial update.
-    auto updated = std::make_shared<std::vector<index::File>>(*g_index_cache.files);
-    for (auto& file : *updated) if (matches(file)) { file.platform = platform; file.platform_learned = true; }
-    g_index_cache.files = updated;
+    std::scoped_lock lock(g_platform_mutex);
+    if (g_learned_count >= 32768) { g_learned_platforms.clear(); g_learned_count = 0; }
+    auto& learned = g_learned_platforms[provider];
+    const auto [entry, fresh] = learned.try_emplace(id, platform);
+    if (!fresh && entry->second == platform) return;
+    if (fresh) ++g_learned_count;
+    else entry->second = platform;
+    ++g_learned_revision;
 }
 
+struct ArtworkSnapshot {
+    std::vector<index::Artwork> records;
+    index::ArtworkLookup by_identity;
+};
 struct ArtworkCache {
     std::string root, metadata_url, user, pass;
-    std::shared_ptr<const std::vector<index::Artwork>> records;
+    std::shared_ptr<const ArtworkSnapshot> records;
 };
 std::mutex g_artwork_mutex;
 ArtworkCache g_artwork_cache;
@@ -326,7 +327,7 @@ auto FormValue(const std::string& value) -> std::string {
 // existing /login session. Reuse the saved account; create no users or web data.
 // A custom public JSON endpoint may be on another origin, which gets no login.
 auto FetchWebArtwork(const std::string& directory, const Config& config, std::stop_token token,
-    bool refresh, std::shared_ptr<const std::vector<index::Artwork>>& records, const ConnectionDiagnostic* diagnostic = nullptr) -> bool {
+    bool refresh, std::shared_ptr<const ArtworkSnapshot>& records, const ConnectionDiagnostic* diagnostic = nullptr) -> bool {
     auto root = config.resolved_url.empty() ? directory : config.resolved_url;
     if (!root.ends_with('/')) root += '/';
     auto endpoint = config.metadata_url.empty() ? ResolveUrl(root, "api/titles") : config.metadata_url;
@@ -371,12 +372,13 @@ auto FetchWebArtwork(const std::string& directory, const Config& config, std::st
         result = request(cookie);
     }
     if (token.stop_requested() || !result.success || result.code != 200 || result.data.size() > LIMIT) return false;
-    auto parsed = std::make_shared<std::vector<index::Artwork>>();
-    if (!index::ParseArtwork(reinterpret_cast<const char*>(result.data.data()), result.data.size(), *parsed)) return false;
-    for (auto& art : *parsed) {
+    auto parsed = std::make_shared<ArtworkSnapshot>();
+    if (!index::ParseArtwork(reinterpret_cast<const char*>(result.data.data()), result.data.size(), parsed->records)) return false;
+    for (auto& art : parsed->records) {
         art.icon = ResolveUrl(endpoint, art.icon);
         art.banner = ResolveUrl(endpoint, art.banner);
     }
+    parsed->by_identity = index::IndexArtwork(parsed->records);
     records = parsed;
     std::scoped_lock lock(g_artwork_mutex);
     g_artwork_cache = {root, endpoint, config.user, config.pass, parsed};
@@ -436,18 +438,18 @@ auto FetchIndex(const std::string& url, const Config& config, std::stop_token to
         return false;
     }
     if (parsed_ok && scope == IndexScope::Catalog && (legacy || !config.metadata_url.empty())) {
-        std::shared_ptr<const std::vector<index::Artwork>> artwork;
+        std::shared_ptr<const ArtworkSnapshot> artwork;
         if (FetchWebArtwork(url, config, token, refresh, artwork, diagnostic)) {
-            index::ApplyArtwork(*parsed, *artwork);
-            index::AddGameFolderCards(*parsed, *artwork);
+            index::ApplyArtwork(*parsed, artwork->by_identity);
+            index::AddGameFolderCards(*parsed, artwork->records);
         }
     } else if (parsed_ok && scope == IndexScope::GameFolder) {
-        std::shared_ptr<const std::vector<index::Artwork>> artwork;
+        std::shared_ptr<const ArtworkSnapshot> artwork;
         {
             std::scoped_lock lock(g_artwork_mutex);
             if (g_artwork_cache.user == config.user && g_artwork_cache.pass == config.pass && IsSameOrigin(g_artwork_cache.root, url)) artwork = g_artwork_cache.records;
         }
-        if (artwork) index::ApplyArtwork(*parsed, *artwork);
+        if (artwork) index::ApplyArtwork(*parsed, artwork->by_identity);
     }
     if (token.stop_requested()) return false;
     if (!parsed_ok) { error = i18n::get(error); return false; }
@@ -463,9 +465,11 @@ auto FetchIndex(const std::string& url, const Config& config, std::stop_token to
     }
     {
         std::scoped_lock lock(g_platform_mutex);
-        for (auto& file : *parsed) {
-            const auto found = g_learned_platforms.find(config.artwork_search_url + '#' + file.id);
-            if (file.platform.empty() && found != g_learned_platforms.end()) { file.platform = found->second; file.platform_learned = true; }
+        if (const auto provider = g_learned_platforms.find(config.artwork_search_url); provider != g_learned_platforms.end()) {
+            for (auto& file : *parsed) {
+                const auto found = provider->second.find(file.id);
+                if (file.platform.empty() && found != provider->second.end()) { file.platform = found->second; file.platform_learned = true; }
+            }
         }
     }
     std::erase_if(*parsed, [](const auto& file) { return file.url.empty(); });
@@ -494,6 +498,8 @@ auto IndexApp(const index::File& file, const std::string& base_url) -> ShopApp {
     app.title_id = file.title_id.empty() ? app.app_id : file.title_id;
     app.name = file.directory ? "[+] " + file.name : file.name;
     app.publisher = file.publisher;
+    app.genre = file.genre;
+    app.description = file.description;
     app.platform = file.platform;
     app.platform_learned = file.platform_learned;
     app.version = file.version ? "v" + std::to_string(file.version) : "";
@@ -507,53 +513,61 @@ auto Contains(const std::vector<std::string>& values, const std::string& id) -> 
     return std::find(values.begin(), values.end(), id) != values.end();
 }
 
+struct BrowseCache {
+    std::weak_ptr<const std::vector<index::File>> source;
+    std::shared_ptr<const index::BrowseIndex> index;
+    std::shared_ptr<const std::vector<size_t>> rows;
+    CatalogQuery query;
+    std::uint64_t platform_revision{};
+};
+std::mutex g_browse_mutex;
+BrowseCache g_browse;
+
 auto FetchIndexApps(const std::string& base_url, const Config& config, std::stop_token token,
     const CatalogQuery& query, std::vector<ShopApp>& out, s64& total, std::string& error) -> bool {
     std::shared_ptr<const std::vector<index::File>> files;
     if (!FetchIndex(base_url, config, token, files, error)) return false;
-    std::vector<const index::File*> selected;
-    std::unordered_map<std::string, size_t> by_id;
-    const auto search = index::Lower(query.search);
-    for (const auto& file : *files) {
-        if (query.consolidated ? file.directory : !file.source_folder.empty()) continue;
-        bool include{};
-        const auto base = file.kind == index::Kind::Base || file.kind == index::Kind::Unknown;
-        switch (query.category) {
-            case Category::All: include = base; break;
-            case Category::NewGames: include = base && !Contains(query.app_ids, file.id); break;
-            case Category::Updates: include = file.kind == index::Kind::Update && Contains(query.app_ids, file.id); break;
-            case Category::Dlc: include = file.kind == index::Kind::Dlc && Contains(query.title_ids, file.title_id) && !Contains(query.app_ids, file.id); break;
-            case Category::Search: include = base && !search.empty() &&
-                (index::Lower(file.name).find(search) != std::string::npos || index::Lower(file.id).find(search) != std::string::npos); break;
-            case Category::Favorites: include = base && Contains(query.app_ids, IndexId(file)); break;
+    std::shared_ptr<const index::BrowseIndex> browse;
+    std::shared_ptr<const std::vector<size_t>> rows;
+    index::BrowseIndex::PlatformsById learned;
+    std::uint64_t revision{};
+    {
+        std::scoped_lock lock(g_browse_mutex, g_platform_mutex);
+        revision = g_learned_revision;
+        if (g_browse.source.lock() == files) {
+            const bool same = g_browse.query.SameSelection(query);
+            // Keep page boundaries stable while artwork enriches other cards.
+            if (revision == g_browse.platform_revision || (same && query.page > 1)) {
+                browse = g_browse.index;
+                if (same) rows = g_browse.rows;
+            }
         }
-        if (file.directory && query.category != Category::Search && query.category != Category::Favorites) include = true;
-        if (!query.platform.empty()) {
-            const auto matches = query.platform == "__unknown__" ? file.platform.empty() : file.platform == query.platform;
-            include = include && (matches || (!query.consolidated && file.directory && file.platform.empty()));
-        }
-        if (!include) continue;
-        const auto key = IndexId(file);
-        if (const auto found = by_id.find(key); found != by_id.end()) {
-            if (file.version > selected[found->second]->version) selected[found->second] = &file;
-        } else {
-            by_id.emplace(key, selected.size());
-            selected.push_back(&file);
+        if (!browse) {
+            const auto provider = g_learned_platforms.find(config.artwork_search_url);
+            if (provider != g_learned_platforms.end()) learned = provider->second;
         }
     }
-    // Generic indices have no uniform added/release date field. Preserve source
-    // order for those choices instead of claiming fabricated dates.
-    if (!std::strcmp(query.order_field, "NAME")) {
-        std::stable_sort(selected.begin(), selected.end(), [](const auto a, const auto b) {
-            if (a->directory != b->directory) return a->directory;
-            return index::Lower(a->name) < index::Lower(b->name);
-        });
+    if (!rows) {
+        if (!browse) browse = std::make_shared<index::BrowseIndex>(*files, std::move(learned));
+        auto selected = browse->Select(*files, query, token);
+        if (token.stop_requested()) return false;
+        rows = std::make_shared<const std::vector<size_t>>(std::move(selected));
+        std::scoped_lock lock(g_browse_mutex);
+        g_browse = {files, browse, rows, query, revision};
     }
-    if (query.descending) std::reverse(selected.begin(), selected.end());
-    total = static_cast<s64>(selected.size());
+    total = static_cast<s64>(rows->size());
     const auto count = std::clamp<s64>(query.page_size, 1, 1000);
     const auto begin = std::min(total, std::max<s64>(0, query.page - 1) * count);
-    for (auto i = begin; i < std::min(total, begin + count); ++i) out.push_back(IndexApp(*selected[i], base_url));
+    for (auto i = begin; i < std::min(total, begin + count); ++i) {
+        const auto& file = (*files)[(*rows)[i]];
+        auto app = IndexApp(file, base_url);
+        const auto platform = browse->PlatformOf(file);
+        if (platform != app.platform) {
+            app.platform = platform;
+            app.platform_learned = true;
+        }
+        out.push_back(std::move(app));
+    }
     return true;
 }
 
@@ -591,7 +605,9 @@ auto FetchIndexTitle(const std::string& base_url, const Config& config, std::sto
         // package HEAD/download or fabricated file URL is needed for a card.
         index::GameFolderQueue pending{folder};
         index::GameFolderQueue::Entry current;
-        auto expanded = std::make_shared<std::vector<index::File>>(*files);
+        auto expanded = std::make_shared<std::vector<index::File>>();
+        std::copy_if(files->begin(), files->end(), std::back_inserter(*expanded),
+            [&id](const auto& file) { return index::BelongsToGame(file, id); });
         while (pending.Pop(current)) {
             if (token.stop_requested()) return false;
             std::shared_ptr<const std::vector<index::File>> contents;
@@ -622,12 +638,14 @@ auto FetchIndexTitle(const std::string& base_url, const Config& config, std::sto
     bool found{};
     std::unordered_map<std::string, size_t> addons;
     for (const auto& file : *files) {
-        const auto own_id = IndexId(file);
         if (!index::BelongsToGame(file, id)) continue;
+        const auto own_id = IndexId(file);
         found = true;
         if (own_id == id) {
             out.name = file.name;
             out.publisher = file.publisher;
+            out.genre = file.genre;
+            out.description = file.description;
             out.banner = {file.banner, IsSameOrigin(base_url, file.banner)};
             out.full_banner = out.banner;
             out.download_size = file.size;
@@ -918,6 +936,8 @@ auto ParseApps(const std::vector<u8>& data, const std::string& base_url, AppType
             if (app.icon.url.empty()) {
                 ParseImage(src, "icon", base_url, app.icon);
             }
+            if (app.genre.empty()) app.genre = index::Genre(src);
+            if (app.description.empty()) app.description = index::Description(src);
             if (app.banner.url.empty()) {
                 ParseImage(src, "banner", base_url, app.banner);
             }
@@ -1195,7 +1215,7 @@ auto JsonString(const std::string& str) -> std::string {
 // icon in it, and carries its game's `titleId` for the installed check plus its
 // own download, which the shop won't answer for under a dlc's id. artwork is
 // THUMB, the size a card draws it at.
-constexpr const char* BASE_FIELDS = "appId displayVersion latestOwnedVersion{displayVersion} titledb{name publisher icon(size:THUMB){url local} banner(size:THUMB){url local}}";
+constexpr const char* BASE_FIELDS = "appId displayVersion latestOwnedVersion{displayVersion} titledb{name publisher category intro icon(size:THUMB){url local} banner(size:THUMB){url local}}";
 constexpr const char* UPDATE_FIELDS = "appId titleId displayVersion title{name publisher icon(size:THUMB){url local} banner(size:THUMB){url local}}";
 constexpr const char* DLC_FIELDS = "appId titleId displayVersion downloadUrl downloadExtension titledb{name publisher banner(size:THUMB){url local}} title{name icon(size:THUMB){url local}}";
 
@@ -1296,13 +1316,19 @@ auto LookupPublicArtwork(const std::string& provider, const std::string& id, std
             return found->second.found;
         }
     }
-    std::chrono::steady_clock::time_point permitted;
-    {
-        std::scoped_lock lock(g_public_artwork_mutex);
-        permitted = std::max(std::chrono::steady_clock::now(), g_public_artwork_next);
-        g_public_artwork_next = permitted + std::chrono::milliseconds(500);
+    // Reserve a slot only when issuing the request. A rapidly cancelled page
+    // must not leave several seconds of empty slots in front of the next one.
+    while (!token.stop_requested()) {
+        {
+            std::scoped_lock lock(g_public_artwork_mutex);
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= g_public_artwork_next) {
+                g_public_artwork_next = now + std::chrono::milliseconds(250);
+                break;
+            }
+        }
+        svcSleepThread(25'000'000);
     }
-    while (!token.stop_requested() && std::chrono::steady_clock::now() < permitted) svcSleepThread(50'000'000);
     if (token.stop_requested()) return false;
     const auto url = provider + (provider.find('?') == std::string::npos ? "?q=" : "&q=") + id;
     const auto response = curl::Api().ToMemory(curl::Url{url}, curl::Flags{curl::Flag_NoRedirect}, curl::StopToken{token},
@@ -1319,13 +1345,86 @@ auto LookupPublicArtwork(const std::string& provider, const std::string& id, std
         if (out.icon.url.empty()) out.icon = out.banner;
         if (out.banner.url.empty()) out.banner = out.icon;
         out.platform = record.platform;
-        matched = !out.icon.url.empty() || !out.platform.empty();
+        out.name = record.name;
+        out.genre = record.genre;
+        out.description = record.description;
+        matched = !out.icon.url.empty() || !out.platform.empty() || !out.genre.empty() || !out.description.empty();
         break;
     }
     std::scoped_lock lock(g_public_artwork_mutex);
     if (g_public_artwork_cache.size() >= 1024) g_public_artwork_cache.clear();
     g_public_artwork_cache[key] = {out, matched, std::chrono::steady_clock::now()};
     return matched;
+}
+
+auto FallbackArtworkUrl(const std::string& id, bool banner) -> std::string {
+    if (id.size() != 16 || !id.starts_with("01") || index::Id(id).empty()) return {};
+    return "https://api.nlib.cc/nx/" + id + (banner ? "/banner/360p" : "/icon/240");
+}
+
+auto LookupGamePresentation(const Config& config, const ShopApp& card, std::stop_token token, ShopApp& out) -> bool {
+    const auto& identity = card.artwork_id.empty() ? card.app_id : card.artwork_id;
+    if (identity.size() != 16 || token.stop_requested()) return false;
+    const auto id = index::Id(identity);
+    if (id.empty()) return false;
+    out = card;
+    // An explicit console or cover from a shop wins. The configured website
+    // also identifies retro packages whose IDs carry no console information.
+    if (!config.artwork_search_url.empty() && (out.icon.url.empty() || out.platform.empty() || !id.starts_with("01"))) {
+        ShopApp web;
+        if (LookupPublicArtwork(config.artwork_search_url, id, token, web)) {
+            if (out.icon.url.empty()) out.icon = std::move(web.icon);
+            if (out.banner.url.empty()) out.banner = std::move(web.banner);
+            if (out.genre.empty()) out.genre = std::move(web.genre);
+            if (out.description.empty()) out.description = std::move(web.description);
+            if ((out.platform.empty() || out.platform_learned) && !web.platform.empty()) out.platform = std::move(web.platform);
+        }
+    }
+    if (token.stop_requested()) return false;
+    if (!id.starts_with("01") || (!out.platform.empty() && out.platform != "Nintendo Switch")
+        || (!out.genre.empty() && !out.description.empty())) return true;
+
+    // Nlib's per-title endpoint supplies an actual synopsis even when older
+    // Ownfoil versions only expose the genre. Never query by a fuzzy name.
+    const auto key = "nlib-es:" + id;
+    ShopApp info;
+    bool cached{};
+    {
+        std::scoped_lock lock(g_public_artwork_mutex);
+        const auto entry = g_public_artwork_cache.find(key);
+        if (entry != g_public_artwork_cache.end() && std::chrono::steady_clock::now() - entry->second.saved < std::chrono::minutes(15)) {
+            info = entry->second.app;
+            cached = true;
+        }
+    }
+    if (!cached) {
+        const auto url = "https://api.nlib.cc/nx/" + id + "?lang=es&fields=name,description,intro,category,icon,banner";
+        const auto data = curl::Api().ToMemory(curl::Url{url}, curl::Flags{curl::Flag_NoRedirect}, curl::StopToken{token},
+            curl::OnProgress{[](s64 total, s64 now, s64, s64) { return total <= 128 * 1024 && now <= 128 * 1024; }});
+        if (token.stop_requested()) return false;
+        bool matched{};
+        index::Artwork record;
+        if (data.success && data.code == 200
+            && index::ParsePublicTitle(reinterpret_cast<const char*>(data.data.data()), data.data.size(), id, record)) {
+            info.genre = std::move(record.genre);
+            info.description = std::move(record.description);
+            // Nlib currently emits some http media URLs behind its reverse
+            // proxy. Use the provider's documented HTTPS routes instead.
+            if (!record.icon.empty()) info.icon.url = FallbackArtworkUrl(id, false);
+            if (!record.banner.empty()) info.banner.url = FallbackArtworkUrl(id, true);
+            matched = true;
+        }
+        if (matched || data.code == 404) {
+            std::scoped_lock lock(g_public_artwork_mutex);
+            if (g_public_artwork_cache.size() >= 1024) g_public_artwork_cache.clear();
+            g_public_artwork_cache[key] = {info, matched, std::chrono::steady_clock::now()};
+        }
+    }
+    if (out.genre.empty()) out.genre = std::move(info.genre);
+    if (out.description.empty()) out.description = std::move(info.description);
+    if (out.icon.url.empty()) out.icon = std::move(info.icon);
+    if (out.banner.url.empty()) out.banner = std::move(info.banner);
+    return true;
 }
 
 void InvalidateCatalog(const std::string& base_url, const Config& config) {
@@ -1339,26 +1438,18 @@ void InvalidateCatalog(const std::string& base_url, const Config& config) {
 }
 
 auto CachedPlatforms(const std::string& base_url, const Config& config) -> std::vector<std::string> {
-    std::vector<std::string> out;
-    std::scoped_lock lock(g_index_mutex);
-    if (!g_index_cache.files || g_index_cache.url != base_url || g_index_cache.user != config.user || g_index_cache.pass != config.pass) return out;
-    for (const auto& file : *g_index_cache.files) {
-        if (file.directory) continue;
-        const auto label = file.platform.empty() ? std::string{"__unknown__"} : file.platform;
-        if (std::find(out.begin(), out.end(), label) == out.end()) out.push_back(label);
-    }
-    std::sort(out.begin(), out.end());
-    return out;
+    std::scoped_lock lock(g_index_mutex, g_browse_mutex);
+    if (g_index_cache.Matches(base_url, config.user, config.pass) && g_browse.source.lock() == g_index_cache.files && g_browse.index)
+        return g_browse.index->platforms;
+    return {};
 }
 
 auto CachedCatalogStatus(const std::string& base_url, const Config& config) -> CatalogStatus {
     CatalogStatus result;
-    std::scoped_lock lock(g_index_mutex);
-    if (!g_index_cache.Matches(base_url, config.user, config.pass)) return result;
-    for (const auto& file : *g_index_cache.files) {
-        result.folders += file.directory;
-        result.mapped_folders += !file.source_folder.empty();
-    }
+    std::scoped_lock lock(g_index_mutex, g_browse_mutex);
+    if (!g_index_cache.Matches(base_url, config.user, config.pass) || g_browse.source.lock() != g_index_cache.files || !g_browse.index) return result;
+    result.folders = static_cast<s64>(g_browse.index->folder_count);
+    result.mapped_folders = static_cast<s64>(g_browse.index->mapped_folders);
     result.unresolved_folders = std::max<s64>(0, result.folders - result.mapped_folders);
     result.partial = result.unresolved_folders != 0;
     return result;

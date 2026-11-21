@@ -80,6 +80,7 @@ private:
     shop_update::Manifest m_release{};
     std::string m_update_error{};
     UpdateState m_update_state{UpdateState::Pending};
+    bool m_show_update_result{};
     u64 m_update_generation{};
     std::stop_source m_update_stop{};
     std::unique_ptr<utils::Async> m_update_worker{};

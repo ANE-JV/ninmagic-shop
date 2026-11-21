@@ -23,6 +23,7 @@ struct File {
     // A metadata-backed game card whose actual containers are read on demand.
     // This URL is never exposed as a downloadable package.
     std::string source_folder;
+    std::string genre, description;
     int64_t version{};
     int64_t size{};
     Kind kind{Kind::Unknown};
@@ -60,6 +61,42 @@ inline auto Image(yyjson_val* obj, const char* key) -> std::string {
     if (yyjson_is_obj(value)) {
         auto url = String(value, "url");
         return url.empty() ? String(value, "src") : url;
+    }
+    return {};
+}
+// Ownfoil uses an array named category; the NinMagic website uses a genre string.
+inline auto MetadataText(yyjson_val* field, size_t byte_limit) -> std::string {
+    if (!yyjson_is_str(field)) return {};
+    const auto data = yyjson_get_str(field);
+    auto size = yyjson_get_len(field);
+    if (size > byte_limit) {
+        size = byte_limit;
+        while (size && (static_cast<unsigned char>(data[size]) & 0xc0) == 0x80) --size;
+    }
+    return std::string(data, size);
+}
+inline auto Genre(yyjson_val* record) -> std::string {
+    for (const auto key : {"genre", "category", "genres"}) {
+        const auto value = yyjson_obj_get(record, key);
+        if (auto text = MetadataText(value, 256); !text.empty()) return text;
+        if (!yyjson_is_arr(value)) continue;
+        std::string joined;
+        size_t i, count;
+        yyjson_val* item;
+        yyjson_arr_foreach(value, i, count, item) {
+            const auto part = MetadataText(item, 128);
+            if (part.empty()) continue;
+            if (joined.size() + part.size() + 2 > 256) break;
+            if (!joined.empty()) joined += ", ";
+            joined += part;
+        }
+        if (!joined.empty()) return joined;
+    }
+    return {};
+}
+inline auto Description(yyjson_val* record) -> std::string {
+    for (const auto key : {"description", "intro", "summary"}) {
+        if (auto text = MetadataText(yyjson_obj_get(record, key), 4096); !text.empty()) return text;
     }
     return {};
 }
@@ -299,6 +336,8 @@ inline auto Parse(const char* bytes, size_t size, std::vector<File>& out, std::s
         if (file.platform.empty()) file.platform = PlatformFromPath(file.url);
         if (file.platform.empty()) file.platform = PlatformFromTags(filename);
         for (const auto source : {item, metadata}) {
+            if (file.genre.empty()) file.genre = Genre(source);
+            if (file.description.empty()) file.description = Description(source);
             for (const auto key : {"coverUrl", "cover_url", "cover", "iconUrl", "icon", "thumbnailUrl", "thumbnail", "imageUrl", "image"})
                 if (file.icon.empty()) file.icon = Image(source, key);
             for (const auto key : {"bannerUrl", "banner", "heroUrl"})
@@ -318,7 +357,26 @@ struct Artwork {
     std::string name, title_id;
     Kind kind{Kind::Unknown};
     bool owned{};
+    std::string genre, description;
 };
+// Nlib is a single-record response, unlike Ownfoil's array and the user's
+// website. Reject a mismatched record before using either text or media flags.
+inline auto ParsePublicTitle(const char* data, size_t size, const std::string& id, Artwork& out) -> bool {
+    if (!data || !size || size > 128 * 1024 || id.size() != 16 || Id(id) != id) return false;
+    const auto doc = yyjson_read(data, size, YYJSON_READ_NOFLAG);
+    if (!doc) return false;
+    const auto record = yyjson_doc_get_root(doc);
+    const bool matches = String(record, "id") == id;
+    if (matches) {
+        out.id = id;
+        out.genre = Genre(record);
+        out.description = Description(record);
+        out.icon = Image(record, "icon");
+        out.banner = Image(record, "banner");
+    }
+    yyjson_doc_free(doc);
+    return matches;
+}
 inline auto RealArtwork(std::string url) -> std::string {
     const auto lower = Lower(url);
     for (const auto host : {"//placehold.it/", "//via.placeholder.com/", "//placehold.co/"})
@@ -352,6 +410,9 @@ inline auto ParseArtwork(const char* bytes, size_t size, std::vector<Artwork>& o
         if (art.id.empty()) art.id = Id(String(record, "id"));
         art.title_id = Id(String(record, "title_id"));
         art.name = String(record, "name");
+        if (art.name.empty()) art.name = String(record, "title_name");
+        art.genre = Genre(record);
+        art.description = Description(record);
         auto kind = Lower(String(record, "app_type"));
         if (kind.empty()) kind = Lower(String(record, "appType"));
         art.kind = kind == "base" ? Kind::Base : kind == "update" ? Kind::Update : kind == "dlc" ? Kind::Dlc : Kind::Unknown;
@@ -390,15 +451,24 @@ inline auto ParseArtwork(const char* bytes, size_t size, std::vector<Artwork>& o
     yyjson_doc_free(doc);
     return true;
 }
-inline void ApplyArtwork(std::vector<File>& files, const std::vector<Artwork>& artwork) {
-    std::unordered_map<std::string, const Artwork*> ids, filenames;
+struct ArtworkLookup {
+    // The caller retains the immutable record snapshot while using this index.
+    std::unordered_map<std::string_view, const Artwork*> ids, filenames;
+};
+inline auto IndexArtwork(const std::vector<Artwork>& artwork) -> ArtworkLookup {
+    ArtworkLookup found;
+    found.ids.reserve(artwork.size());
     for (const auto& art : artwork) {
-        if (!art.id.empty()) ids[art.id] = &art;
+        if (!art.id.empty()) found.ids[art.id] = &art;
         if (!art.filename.empty()) {
-            const auto [found, fresh] = filenames.emplace(art.filename, &art);
-            if (!fresh) found->second = nullptr; // ambiguous filenames never guess
+            const auto [entry, fresh] = found.filenames.emplace(art.filename, &art);
+            if (!fresh) entry->second = nullptr; // ambiguous filenames never guess
         }
     }
+    return found;
+}
+inline void ApplyArtwork(std::vector<File>& files, const ArtworkLookup& metadata) {
+    const auto& [ids, filenames] = metadata;
     for (auto& file : files) {
         const Artwork* art{};
         if (file.directory) {
@@ -416,7 +486,12 @@ inline void ApplyArtwork(std::vector<File>& files, const std::vector<Artwork>& a
         if (file.icon.empty()) file.icon = art->icon.empty() ? art->banner : art->icon;
         if (file.banner.empty()) file.banner = art->banner.empty() ? art->icon : art->banner;
         if (file.platform.empty()) file.platform = art->platform;
+        if (file.genre.empty()) file.genre = art->genre;
+        if (file.description.empty()) file.description = art->description;
     }
+}
+inline void ApplyArtwork(std::vector<File>& files, const std::vector<Artwork>& artwork) {
+    ApplyArtwork(files, IndexArtwork(artwork));
 }
 
 inline auto HtmlText(std::string text) -> std::string {
