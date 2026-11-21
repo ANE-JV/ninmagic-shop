@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "app": "NinMagic Shop",
-  "version": "0.1.3",
-  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/7329224af9ccbcff124979995d56763247ae7802/releases/0.1.3/NinMagic-Shop.nro",
-  "bytes": 4639394,
-  "sha256": "6129e80b749637364890e8c44ee55075b8cedc00582312f9b624648a88fbced4",
-  "notes": "Biblioteca con Nintendo Switch primero, diez carátulas visibles en cinco columnas y dos filas, y datos del juego seleccionado con su imagen de fondo a la derecha. Consolas, búsqueda, cola y edición de tiendas conservadas. Los servidores antiguos muestran juegos identificados mediante metadatos exactos; las carpetas sin identificar siguen accesibles desde Secciones. Incluye la corrección de conexión para Ownfoil antiguo y libcurl 7.69.1."
+  "version": "0.1.4",
+  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/b380db8102170d52c49cccb5bc887a6fdeab8334/releases/0.1.4/NinMagic-Shop.nro",
+  "bytes": 4663970,
+  "sha256": "a646bf4acdf542779cbaeae8249900265a9aa999df4c06e2de3ec6605ffeb635",
+  "notes": "Desplázate con la cruceta o el stick para seguir pasando páginas. El buscador consulta la biblioteca y admite nombres con o sin acentos. Las carátulas cargan en segundo plano. La ficha muestra el nombre, el género, la descripción y el fondo cuando el proveedor los ofrece. Encontrarás «Actualizar app» en la columna izquierda."
 }
