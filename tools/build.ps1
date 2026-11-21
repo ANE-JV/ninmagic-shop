@@ -64,6 +64,8 @@ function ConvertTo-MsysPath([string]$Path) {
 $stageUnix = ConvertTo-MsysPath $stageRoot
 $previousDevkit = $env:DEVKITPRO
 $previousJobs = $env:NINMAGIC_BUILD_JOBS
+$previousClean = $env:NINMAGIC_BUILD_CLEAN
+$previousPython = $env:NINMAGIC_PYTHON
 $previousSourceCommit = $env:NINMAGIC_SOURCE_COMMIT
 $previousSourceBranch = $env:NINMAGIC_SOURCE_BRANCH
 $sourceCommit = & git -C $projectRoot rev-parse --short HEAD
@@ -71,6 +73,8 @@ $sourceBranch = & git -C $projectRoot symbolic-ref --short HEAD
 try {
     $env:DEVKITPRO = ConvertTo-MsysPath $sdkRoot
     $env:NINMAGIC_BUILD_JOBS = [string]$Jobs
+    $env:NINMAGIC_BUILD_CLEAN = if ($Package) { '1' } else { '0' }
+    $env:NINMAGIC_PYTHON = ConvertTo-MsysPath (Get-Command $Python -CommandType Application | Select-Object -First 1 -ExpandProperty Source)
     $env:NINMAGIC_SOURCE_COMMIT = [string]$sourceCommit
     $env:NINMAGIC_SOURCE_BRANCH = [string]$sourceBranch
     & $bash --login "$stageUnix/tools/build.sh" $stageUnix "$stageUnix/build-release"
@@ -78,6 +82,8 @@ try {
 } finally {
     $env:DEVKITPRO = $previousDevkit
     $env:NINMAGIC_BUILD_JOBS = $previousJobs
+    $env:NINMAGIC_BUILD_CLEAN = $previousClean
+    $env:NINMAGIC_PYTHON = $previousPython
     $env:NINMAGIC_SOURCE_COMMIT = $previousSourceCommit
     $env:NINMAGIC_SOURCE_BRANCH = $previousSourceBranch
 }

@@ -1,4 +1,4 @@
-# NinMagic Shop 0.1.5 — beta
+# NinMagic Shop 0.1.6 — beta
 
 Tienda para Nintendo Switch con Atmosphère. Acceso a tu servidor, catálogo con carátulas, búsqueda, favoritos y cola de instalación. Proyecto separado de las demás aplicaciones NinMagic.
 
@@ -6,7 +6,7 @@ Deriva de [Sphaira 1.1.1](https://github.com/NaGaa95/sphaira), cuyo cliente Ownf
 
 ## Instalación
 
-Descarga [NinMagic-Shop-0.1.5.zip](https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/main/releases/0.1.5/NinMagic-Shop-0.1.5.zip) y extráelo en la raíz de la microSD. La aplicación queda en:
+Descarga [NinMagic-Shop-0.1.6.zip](https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/main/releases/0.1.6/NinMagic-Shop-0.1.6.zip) y extráelo en la raíz de la microSD. La aplicación queda en:
 
 ```
 sdmc:/switch/NinMagicShop/NinMagic-Shop.nro
@@ -85,6 +85,10 @@ La descarga se fija a un commit de este repositorio y comprueba tamaño, SHA-256
 - `config/NinMagicShop/`: perfiles, preferencias y estado del actualizador.
 
 Los perfiles guardados contienen las credenciales en la microSD. No compartas esa carpeta como parte de un pack público. Los ZIP publicados contienen la aplicación y sus licencias, sin perfiles personales ni juegos.
+
+## Cambios de 0.1.6
+
+- Corrige el cierre al conectar con la tienda antes de mostrar la biblioteca. Los paquetes de publicación recompilan la aplicación completa.
 
 ## Cambios de 0.1.5
 

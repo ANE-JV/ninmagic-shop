@@ -49,8 +49,15 @@ cmake -S "$source_root" -B "$build_root" \
     -DENABLE_DEVOPTAB_SFTP=OFF -DENABLE_DEVOPTAB_WEBDAV=OFF -DENABLE_DEVOPTAB_HTTP=ON \
     -DNINMAGIC_SOURCE_COMMIT="${NINMAGIC_SOURCE_COMMIT:-}" \
     -DNINMAGIC_SOURCE_BRANCH="${NINMAGIC_SOURCE_BRANCH:-}"
-cmake --build "$build_root" --parallel "$jobs"
+# Release packages must not mix old request layouts with newly compiled code.
+build_args=()
+if [[ "${NINMAGIC_BUILD_CLEAN:-0}" == 1 ]]; then
+    build_args+=(--clean-first)
+fi
+cmake --build "$build_root" "${build_args[@]}" --parallel "$jobs"
 test -s "$build_root/NinMagic-Shop.nro"
+"${NINMAGIC_PYTHON:-python3}" "$source_root/tools/verify-curl-abi.py" "$build_root/sphaira/sphaira.elf" \
+    --readelf "$DEVKITA64/bin/aarch64-none-elf-readelf"
 {
     printf 'libnx %s\n' "$libnx_commit"
     "$DEVKITA64/bin/aarch64-none-elf-gcc" --version | head -n 1

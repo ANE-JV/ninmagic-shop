@@ -8,8 +8,7 @@
 #include <stop_token>
 #include <unordered_map>
 
-using namespace sphaira::ownfoil::api;
-namespace index = sphaira::ownfoil::index;
+namespace sphaira::ownfoil::api {
 using s64 = std::int64_t;
 
 struct Config { std::string user, pass, artwork_search_url; };
@@ -43,7 +42,10 @@ bool FetchNativePage(const std::string&, const Config&, std::stop_token, const C
 
 #include "production_native_groups.inc"
 
+} // namespace sphaira::ownfoil::api
+
 int main() {
+    using namespace sphaira::ownfoil::api;
     for (int i = 0; i < 450; ++i)
         catalog.push_back({std::to_string(i), i % 17 == 0 ? "NES" : "Nintendo Switch", "Mario"});
     catalog.push_back({"0557200006110000", "", "Mario"});
