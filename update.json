@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "app": "NinMagic Shop",
-  "version": "0.1.6",
-  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/bfa32f3730fe06e32b241e0cb1f685b9358c7cb9/releases/0.1.6/NinMagic-Shop.nro",
-  "bytes": 4685250,
-  "sha256": "b949974f94f5049394c89a514ec7f9fa0e4cdd2a6fe7a90d16ebcd71caf8818f",
-  "notes": "Corrige el cierre de la aplicación durante la primera conexión a la tienda."
+  "version": "0.1.7",
+  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/1fb4f7014791165365ef8cbb2fab4745fef62509/releases/0.1.7/NinMagic-Shop.nro",
+  "bytes": 4685282,
+  "sha256": "5c5bfdedc11e3ca2cbcd39f4e8bbbf18588e8f43b3ee176f1c6255de11558028",
+  "notes": "Muestra la carátula de la biblioteca al abrir la ficha y permite elegir la base y la actualización en cuanto llegan los enlaces."
 }
