@@ -184,8 +184,9 @@ auto PlannedVersion(const api::ShopVersion& version) -> sphaira::ownfoil::plan::
 }
 
 auto FormatInstallVersion(const api::ShopVersion& version) -> std::string {
-    if (!version.base && version.version > 0) {
-        return FormatVersion(version.display, version.version);
+    if (!version.base) {
+        if (version.version_known && version.version > 0) return FormatVersion(version.display, version.version);
+        return version.display.empty() ? "Actualización" : "Actualización (" + version.display + ")";
     }
 
     const auto base = "Base"_i18n;
@@ -338,22 +339,34 @@ auto BuildImageCache(const std::string& app_id, const std::string& url, const ch
     return path;
 }
 
-auto MakeTitlePage(const api::ShopApp& app) -> TitlePage {
-    TitlePage page;
-    page.dlc = app.type == api::AppType::Dlc;
-    page.id = page.dlc ? app.app_id : app.title_id;
-    page.artwork_id = app.artwork_id;
-    page.game_id = app.title_id;
-    page.name = app.name;
-    page.publisher = app.publisher;
-    page.platform = app.platform;
-    page.genre = app.genre;
-    page.description = app.description;
-    page.game_name = app.game_name;
-    page.banner = app.banner;
-    page.icon = app.icon;
-    page.download = app.download;
-    return page;
+ShopCardTexture::~ShopCardTexture() {
+    DeleteTexture(handle);
+}
+
+void TitleMenu::LoadDetailBanner(const api::ShopImage& image, int TitleMenu::*destination) {
+    const auto token = m_stop.get_token();
+    if (image.url.empty() || token.stop_requested()) return;
+    {
+        // The package and editorial results can point to the same original.
+        std::lock_guard lock(m_banner_mutex);
+        if (std::find(m_requested_banners.begin(), m_requested_banners.end(), image.url) != m_requested_banners.end()) return;
+        m_requested_banners.push_back(image.url);
+    }
+    const auto& id = m_page.artwork_id.empty() ? m_page.id : m_page.artwork_id;
+    const auto& card = m_page.icon.url.empty() ? m_page.banner : m_page.icon;
+    ImageResult pixels;
+    if (m_page.card_texture && image.url == card.url) {
+        // The grid already owns this download, including an in-flight one.
+        // Use its encoded copy to upgrade resolution if it has reached the SD.
+        pixels = ImageLoadArtworkFile(BuildImageCache(id, image.url, "card"), 640);
+    } else {
+        const auto kind = destination == &TitleMenu::m_icon ? "icon" : m_mode == Mode::Preview ? "preview" : "banner";
+        pixels = LoadShopImage(m_config, id, image, kind, token);
+    }
+    if (pixels.data.empty() || token.stop_requested()) return;
+    evman::push(evman::CallbackEventData{[this, destination, pixels = std::move(pixels)] {
+        this->*destination = CreateTexture(pixels);
+    }, token}, false);
 }
 
 TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& base_url, const TitlePage& page, Mode mode)
@@ -384,10 +397,6 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
     };
     // the log says how long after opening each part landed.
     const auto opened = m_opened;
-    // a card with no banner opens a page with none either, which opens on the
-    // card's icon instead.
-    const auto icon_for_banner = m_page.banner.url.empty();
-
     // owned by the page rather than fired and forgotten: ~Async joins, and a
     // thread can't join itself.
     m_loader = std::make_unique<utils::Async>([this, token, send, opened](){
@@ -410,7 +419,7 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
         // the worker keeps its own copy of what it still has to fetch, since the
         // title itself moves to the main thread. the page's own banner is CLIENT,
         // the box its big image is drawn at; a card's THUMB only stands in.
-        const auto banner = title.banner.url.empty() ? m_page.banner : title.banner;
+        const auto banner = title.banner;
 
         send([this, title = std::move(title)]() mutable {
             m_title = std::move(title);
@@ -445,33 +454,26 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
             }
         });
 
-        // ahead of the screenshots rather than beside them: fetched with them, an
-        // uncached banner took ~150ms to download and ~107ms to decode, twice what
-        // it takes alone. sent even when nothing was read, since the page waits.
-        if (!banner.url.empty()) {
-            const auto& artwork_id = m_page.artwork_id.empty() ? m_page.id : m_page.artwork_id;
-            auto image = LoadShopImage(m_config, artwork_id, banner, m_mode == Mode::Preview ? "preview" : "banner", token);
-            if (!image.data.empty()) {
-                log_write("[OWNFOIL] banner for %s decoded after %zums\n", m_page.id.c_str(), opened.GetMs());
-            }
-            send([this, image = std::move(image)]() {
-                if (!image.data.empty()) {
-                    m_banner = CreateTexture(image);
-                }
-            });
-        }
-
+        LoadDetailBanner(banner, &TitleMenu::m_banner);
     });
 
     // the installed lookup mounts the game's control nca, so it runs beside the
     // shop's request rather than after it. the card's icon follows it here.
-    m_console = std::make_unique<utils::Async>([this, token, send, icon_for_banner](){
+    m_console = std::make_unique<utils::Async>([this, token, send](){
         LoadInstalled(token);
+        if (token.stop_requested()) return;
+        const auto& artwork_id = m_page.artwork_id.empty() ? m_page.id : m_page.artwork_id;
+        LoadDetailBanner(m_page.banner, &TitleMenu::m_card_banner);
+        if (!m_page.card_texture && (m_page.banner.url.empty() || m_page.dlc)) {
+            const auto icon = m_page.icon.url.empty()
+                ? api::ShopImage{api::FallbackArtworkUrl(artwork_id, false), false}
+                : m_page.icon;
+            LoadDetailBanner(icon, &TitleMenu::m_icon);
+        }
         if (token.stop_requested()) return;
 
         // Package availability and public editorial data have independent failure modes.
         // A slow or incomplete package folder must not hold the game description hostage.
-        const auto& artwork_id = m_page.artwork_id.empty() ? m_page.id : m_page.artwork_id;
         api::ShopApp card{};
         card.app_id = m_page.id;
         card.title_id = m_page.game_id;
@@ -498,39 +500,7 @@ TitleMenu::TitleMenu(const sphaira::ownfoil::Config& config, const std::string& 
                 Layout();
             }
         });
-        if (!backdrop.url.empty() && backdrop.url != m_page.banner.url) {
-            // The package worker may resolve the same banner concurrently.
-            auto image = LoadShopImage(m_config, artwork_id, backdrop, m_mode == Mode::Preview ? "preview-source" : "banner-source", token);
-            if (!image.data.empty() && !token.stop_requested()) {
-                send([this, image = std::move(image)]() {
-                    m_presentation_artwork = CreateTexture(image);
-                });
-                if (m_mode == Mode::Preview) return;
-            }
-        }
-        if (token.stop_requested()) return;
-
-        // a page with no banner opens on the card's icon instead, which the grid
-        // has usually fetched. sent even when nothing was read, as above.
-        if (icon_for_banner) {
-            auto icon = LoadShopImage(m_config, artwork_id, m_page.icon, "icon", token);
-            send([this, icon = std::move(icon)]() {
-                if (!icon.data.empty()) {
-                    m_icon = CreateTexture(icon);
-                }
-            });
-            return;
-        }
-
-        // a dlc names its game beside this icon, which the page doesn't wait for:
-        // it can take longer than the package query.
-        if (m_page.dlc) {
-            if (auto image = LoadShopImage(m_config, artwork_id, m_page.icon, "icon", token); !image.data.empty()) {
-                send([this, image = std::move(image)]() {
-                    m_icon = CreateTexture(image);
-                });
-            }
-        }
+        LoadDetailBanner(backdrop, &TitleMenu::m_presentation_artwork);
     });
     if (!m_loader->IsRunning() || !m_console->IsRunning()) {
         m_failed = true;
@@ -604,6 +574,7 @@ TitleMenu::~TitleMenu() {
     m_gallery.reset();
 
     DeleteTexture(m_banner);
+    DeleteTexture(m_card_banner);
     DeleteTexture(m_icon);
     DeleteTexture(m_presentation_artwork);
     for (const auto image : m_screenshots) {
@@ -642,7 +613,16 @@ void TitleMenu::ChoosePanelVersion() {
 }
 
 void TitleMenu::EnsureSelection() {
-    if (!IsReady() || m_selection_ready) return;
+    if (!m_loaded || m_failed) return;
+    if (m_selection_ready) {
+        // An update-only choice can wait for the installed-game lookup. Include
+        // its base only if the console confirms this is a new installation.
+        if (m_console_loaded && !m_installed.installed && m_update_selected && !m_base_selected && HasBasePackage()) {
+            m_base_selected = true;
+            ChoosePanelVersion();
+        }
+        return;
+    }
     m_selection_ready = true;
     m_base_selected = HasBasePackage();
     m_update_selected = HasUpdatePackage();
@@ -701,9 +681,10 @@ auto TitleMenu::DetailActionBounds(s64 action) const -> Vec4 {
 
 auto TitleMenu::DetailActionAvailable(s64 action) const -> bool {
     if (action == 3) return true; // The review can be requested while its files are being resolved.
-    if (!IsReady()) return false;
+    if (!m_loaded || m_failed) return false;
     if (action == 0) return HasBasePackage();
     if (action == 1) return HasUpdatePackage();
+    if (!IsReady()) return false;
     if (action == 2) {
         if (m_page.dlc) return HasDownload(m_page.download) && !m_dlc_installed;
         for (size_t i = 0; i < m_rows.size(); ++i)
@@ -728,7 +709,7 @@ void TitleMenu::ActivateDetailAction(s64 action) {
         ChoosePanelVersion();
     } else if (action == 1) {
         m_update_selected = !m_update_selected;
-        if (m_update_selected && !m_installed.installed && HasBasePackage()) m_base_selected = true;
+        if (m_update_selected && m_console_loaded && !m_installed.installed && HasBasePackage()) m_base_selected = true;
         ChoosePanelVersion();
     } else {
         m_dlc_selected = !m_dlc_selected;
@@ -774,7 +755,8 @@ void TitleMenu::DrawDetailPanel(NVGcontext* vg, Theme*, const Vec4& bounds, int 
     m_detail_bounds = bounds;
     EnsureSelection();
     const auto note = m_failed ? "Pulsa para ver el motivo" : !IsReady()
-        ? (m_pending_action == PendingAction::Options ? "Abriendo la selección al terminar…" : "Comprobando los archivos del juego…")
+        ? (m_pending_action == PendingAction::Options ? "Se abrirá la selección al terminar…"
+            : m_loaded ? "Comprobando qué tienes instalado en la consola…" : "Buscando el juego, sus actualizaciones y DLC…")
         : !HasPackage() ? "El servidor no indicó archivos instalables"
         : m_title.catalog_partial ? "Contenido parcial: revisa los extras"
         : HasSomethingToInstall() ? "Instalar el juego con sus extras" : "Contenido instalado o sin selección";
@@ -787,10 +769,13 @@ void TitleMenu::DrawDetailPanel(NVGcontext* vg, Theme*, const Vec4& bounds, int 
     state.description = !m_detail_description.empty() ? m_detail_description.c_str()
         : finished ? "Sin descripción disponible" : "Cargando ficha…";
     state.footer = GetPublisher().c_str();
-    state.artwork = m_banner ? m_banner : m_presentation_artwork ? m_presentation_artwork : fallback_artwork ? fallback_artwork : m_icon;
-    state.ready = IsReady();
+    state.artwork = DetailArtwork(fallback_artwork);
+    state.ready = m_loaded && !m_failed;
+    state.loading_files = !m_loaded && !m_failed;
     state.selected = {m_base_selected, m_update_selected, m_dlc_selected};
     state.available = {DetailActionAvailable(0), DetailActionAvailable(1), DetailActionAvailable(2)};
+    if (state.ready && !state.available[1] && !m_page.dlc)
+        state.update_status = m_title.catalog_partial ? "Sin confirmar" : "Sin archivo";
     state.primary_label = m_failed || (IsReady() && !HasPackage()) ? "Ver motivo" : IsReady() ? "Instalar paquete" : "Revisar instalación";
     state.primary_enabled = DetailActionAvailable(3);
     state.queue_enabled = DetailActionAvailable(4);
@@ -809,6 +794,8 @@ void TitleMenu::DrawPreviewSummary(NVGcontext* vg, const Vec4& bounds, const api
     state.footer = app.publisher.c_str();
     state.artwork = fallback_artwork;
     state.note = "Consultando contenido…";
+    state.loading_files = true;
+    state.primary_label = "Revisar instalación";
     sphaira::ui::shop::DrawDetailPanel(vg, bounds, state);
 }
 
@@ -892,7 +879,17 @@ void TitleMenu::Update(Controller* controller, TouchInfo* touch) {
 
 auto TitleMenu::GetBanner() const -> const api::ShopImage& {
     if (!m_title.banner.url.empty()) return m_title.banner;
-    return m_presentation.banner.url.empty() ? m_page.banner : m_presentation.banner;
+    if (!m_presentation.banner.url.empty()) return m_presentation.banner;
+    return m_page.banner.url.empty() ? m_page.icon : m_page.banner;
+}
+
+auto TitleMenu::DetailArtwork(int fallback) const -> int {
+    if (m_banner) return m_banner;
+    if (m_presentation_artwork) return m_presentation_artwork;
+    if (m_card_banner) return m_card_banner;
+    if (fallback) return fallback;
+    if (m_page.card_texture && m_page.card_texture->handle) return m_page.card_texture->handle;
+    return m_icon;
 }
 
 auto TitleMenu::GetName() const -> const std::string& {
@@ -932,7 +929,7 @@ auto TitleMenu::GetImageCount() const -> s64 {
 auto TitleMenu::GetImage(s64 index) const -> int {
     if (!GetBanner().url.empty()) {
         if (index == 0) {
-            return m_banner ? m_banner : m_presentation_artwork;
+            return DetailArtwork();
         }
         index--;
     }
@@ -1627,6 +1624,8 @@ void TitleMenu::DrawPage(NVGcontext* vg, Theme* theme) {
                     }
                 }
             }
+        } else if (const auto cover = DetailArtwork()) {
+            sphaira::ui::shop::ImageCover(vg, image_pos, cover, IMAGE_ROUNDING);
         } else {
             // nothing to show but an icon: the game's own, where the banner would be.
             gfx::drawRect(vg, image_pos, theme->GetColour(ThemeEntryID_GRID), IMAGE_ROUNDING);

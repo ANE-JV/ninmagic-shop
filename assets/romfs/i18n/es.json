@@ -1387,7 +1387,7 @@
   "Package link unavailable (HTTP 404/410)": "Enlace al archivo no disponible (HTTP 404/410)",
   "Download access denied (HTTP 401/403)": "Acceso a la descarga denegado (HTTP 401/403)",
   "Package download interrupted": "Descarga del paquete interrumpida",
-  "Refresh the shop catalog. If it persists, check the file path in Ownfoil and rescan the library.": "Actualiza el catálogo. Si vuelve a ocurrir, revisa la ruta del archivo en Ownfoil y vuelve a escanear la biblioteca.",
+  "Refresh the catalog in NinMagic Shop. If it continues, ask your shop administrator to check the download link.": "Actualiza el catálogo en NinMagic Shop. Si el error continúa, pide al administrador de la tienda que compruebe el enlace de descarga.",
   "Check the shop profile and that this account can download the file.": "Revisa los datos de la tienda y el permiso de descarga de esta cuenta.",
   "The server could not send the requested bytes. Check the connection and retry.": "El servidor no pudo enviar los datos solicitados. Comprueba la conexión y vuelve a intentarlo."
 }

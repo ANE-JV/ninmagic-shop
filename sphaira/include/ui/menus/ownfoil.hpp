@@ -22,6 +22,8 @@
 
 namespace sphaira::ui::menu::ownfoil {
 struct TitleMenu;
+struct TitlePage;
+struct ShopCardTexture;
 
 struct Menu final : grid::Menu {
     explicit Menu(u32 flags, std::function<void()> check_update = {});
@@ -55,15 +57,7 @@ private:
     enum class ImageState { None, Progress, Done, Failed };
 
     struct LazyImage {
-        LazyImage() = default;
-        LazyImage(const LazyImage&) = delete;
-        auto operator=(const LazyImage&) -> LazyImage& = delete;
-        // movable so the entry vector can grow; the moved-from half must not
-        // then delete the texture the new owner holds.
-        LazyImage(LazyImage&& rhs) noexcept;
-        auto operator=(LazyImage&& rhs) noexcept -> LazyImage&;
-        ~LazyImage();
-        int image{};
+        std::shared_ptr<ShopCardTexture> texture{};
         ImageState state{ImageState::None};
     };
 
@@ -116,6 +110,7 @@ private:
     // kicks off a cache read or download when there is no texture yet; `budget`
     // caps the work done per frame.
     auto GetImage(Entry& e, bool banner, int& budget) -> int;
+    auto MakeTitlePage(const sphaira::ownfoil::api::ShopApp& app) -> TitlePage;
     void OpenSelected();
     void QueuePublicArtwork(Entry& entry);
     void EnterDirectory(const sphaira::ownfoil::api::ShopApp& app);

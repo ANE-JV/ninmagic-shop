@@ -87,20 +87,25 @@ constexpr CategoryMode CATEGORIES[] = {
 
 } // namespace
 
-Menu::LazyImage::LazyImage(LazyImage&& rhs) noexcept {
-    *this = std::move(rhs);
-}
-
-auto Menu::LazyImage::operator=(LazyImage&& rhs) noexcept -> LazyImage& {
-    std::swap(image, rhs.image);
-    std::swap(state, rhs.state);
-    return *this;
-}
-
-Menu::LazyImage::~LazyImage() {
-    if (image) {
-        nvgDeleteImage(App::GetVg(), image);
-    }
+auto Menu::MakeTitlePage(const sphaira::ownfoil::api::ShopApp& app) -> TitlePage {
+    TitlePage page;
+    page.dlc = app.type == sphaira::ownfoil::api::AppType::Dlc;
+    page.id = page.dlc ? app.app_id : app.title_id;
+    page.artwork_id = app.artwork_id;
+    page.game_id = app.title_id;
+    page.name = app.name;
+    page.publisher = app.publisher;
+    page.platform = app.platform;
+    page.genre = app.genre;
+    page.description = app.description;
+    page.game_name = app.game_name;
+    page.banner = app.banner;
+    page.icon = app.icon;
+    page.download = app.download;
+    const auto& entry = m_entries[m_entry_index];
+    const auto& cover = app.icon.url.empty() && !app.banner.url.empty() ? entry.banner : entry.icon;
+    if (cover.state == ImageState::Done || cover.state == ImageState::Progress) page.card_texture = cover.texture;
+    return page;
 }
 
 Menu::Menu(u32 flags, std::function<void()> check_update)
@@ -646,16 +651,18 @@ void Menu::QueuePublicArtwork(Entry& entry) {
 auto Menu::GetImage(Entry& entry, bool banner, int& budget) -> int {
     QueuePublicArtwork(entry);
     auto& image = banner ? entry.banner : entry.icon;
-    if (image.state != ImageState::None || budget <= 0) return image.image;
+    const auto handle = image.texture ? image.texture->handle : 0;
+    if (image.state != ImageState::None || budget <= 0) return handle;
 
     const auto slot = std::find_if(m_cover_workers.begin(), m_cover_workers.end(),
         [](const auto& worker) { return !worker || worker->HasFinished(); });
-    if (slot == m_cover_workers.end()) return 0;
+    if (slot == m_cover_workers.end()) return handle;
 
     const auto token = m_page_stop.get_token();
     const auto index = static_cast<size_t>(&entry - m_entries.data());
     const auto& src = banner ? entry.app.banner : entry.app.icon;
     const auto& id = entry.app.artwork_id.empty() ? entry.app.app_id : entry.app.artwork_id;
+    if (!image.texture) image.texture = std::make_shared<ShopCardTexture>();
     image.state = ImageState::Progress;
     --budget;
     *slot = std::make_unique<utils::Async>([this, token, index, banner, src, id, config = m_config] {
@@ -671,15 +678,17 @@ auto Menu::GetImage(Entry& entry, bool banner, int& budget) -> int {
             if (!pixels.data.empty()) {
                 const auto replacement = nvgCreateImageRGBA(App::GetVg(), pixels.w, pixels.h, 0, pixels.data.data());
                 if (replacement) {
-                    if (thumbnail.image) nvgDeleteImage(App::GetVg(), thumbnail.image);
-                    thumbnail.image = replacement;
+                    // A gallery viewer may still display the old handle. Give a
+                    // replacement its own lifetime, while filling a pending slot in place.
+                    if (thumbnail.texture->handle) thumbnail.texture = std::make_shared<ShopCardTexture>();
+                    thumbnail.texture->handle = replacement;
                 }
             }
-            thumbnail.state = thumbnail.image ? ImageState::Done : ImageState::Failed;
+            thumbnail.state = thumbnail.texture->handle ? ImageState::Done : ImageState::Failed;
         }, token}, false);
     });
     if (!(*slot)->IsRunning()) image.state = ImageState::Failed;
-    return image.image;
+    return handle;
 }
 
 void Menu::DrawDiscoverButton(NVGcontext* vg, Theme*) const {

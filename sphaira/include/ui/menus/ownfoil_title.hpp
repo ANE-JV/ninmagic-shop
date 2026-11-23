@@ -10,6 +10,7 @@
 
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 #include <stop_token>
@@ -26,6 +27,16 @@ inline constexpr auto CACHE_PATH = "/switch/NinMagicShop/cache/ownfoil";
 auto BuildImageCache(const std::string& app_id, const std::string& url, const char* kind) -> fs::FsPath;
 auto LoadShopImage(const sphaira::ownfoil::Config& config, const std::string& artwork_id,
     const sphaira::ownfoil::api::ShopImage& image, const char* kind, std::stop_token token) -> ImageResult;
+
+// Created, filled and released on the UI thread. A detail page may outlive
+// the catalog page that originally uploaded this thumbnail.
+struct ShopCardTexture {
+    ShopCardTexture() = default;
+    ShopCardTexture(const ShopCardTexture&) = delete;
+    auto operator=(const ShopCardTexture&) -> ShopCardTexture& = delete;
+    ~ShopCardTexture();
+    int handle{};
+};
 
 // what a page is opened with, so it can draw the name and artwork its card
 // already carried on its first frame rather than wait on the shop.
@@ -44,12 +55,11 @@ struct TitlePage {
     sphaira::ownfoil::api::ShopImage banner{};
     // drawn beside the game a dlc needs, and in place of a missing banner.
     sphaira::ownfoil::api::ShopImage icon{};
+    std::shared_ptr<const ShopCardTexture> card_texture{};
     // a dlc's own file: the shop answers with no apps under a dlc's id, so this
     // only ever comes from whatever opened the page.
     sphaira::ownfoil::api::ShopDownload download{};
 };
-
-auto MakeTitlePage(const sphaira::ownfoil::api::ShopApp& app) -> TitlePage;
 
 // the page's images edge to edge at the size the shop keeps them. pushed over the
 // page, which outlives it, so its smaller copies stand in while a full one loads.
@@ -147,6 +157,8 @@ private:
     // the shop's once it has answered, the card's until then - too small to draw,
     // but enough to say whether there is a banner to make room for.
     auto GetBanner() const -> const sphaira::ownfoil::api::ShopImage&;
+    auto DetailArtwork(int fallback = 0) const -> int;
+    void LoadDetailBanner(const sphaira::ownfoil::api::ShopImage& image, int TitleMenu::*destination);
     auto GetName() const -> const std::string&;
     auto GetPublisher() const -> const std::string&;
     auto GetDescription() const -> const std::string&;
@@ -241,8 +253,11 @@ private:
     std::vector<Row> m_rows{};
 
     int m_banner{};
+    int m_card_banner{};
     int m_icon{};
     int m_presentation_artwork{};
+    std::mutex m_banner_mutex{};
+    std::vector<std::string> m_requested_banners{};
     std::vector<int> m_screenshots{};
     s64 m_image_index{};
 

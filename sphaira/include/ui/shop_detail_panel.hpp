@@ -48,6 +48,8 @@ struct DetailPanelState {
     const char* description{""};
     int artwork{};
     bool ready{};
+    bool loading_files{};
+    const char* update_status{""};
     std::array<bool, 3> selected{};
     std::array<bool, 3> available{};
     const char* primary_label{"Instalar paquete"};
@@ -123,16 +125,20 @@ inline void DrawDetailPanel(NVGcontext* vg, Rect bounds, const DetailPanelState&
     nvgFillPaint(vg, nvgLinearGradient(vg, contents.x, contents.y, contents.x + contents.w, contents.y,
         nvgRGBA(116, 44, 205, 105), nvgRGBA(49, 36, 82, 155))); nvgFill(vg);
     DrawIcon(vg, Icon::Queue, bounds.x + 32.f * sx, bounds.y + 232.f * sy, 17.f * scale, White);
-    Text(vg, bounds.x + 59.f * sx, bounds.y + 240.f * sy, 15.f * scale, White, "CONTENIDO DEL SERVIDOR", NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE, true);
+    Text(vg, bounds.x + 59.f * sx, bounds.y + 240.f * sy, 15.f * scale, state.loading_files ? Cyan : White,
+        state.loading_files ? "CONSULTANDO ARCHIVOS…" : "CONTENIDO DEL SERVIDOR", NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE, true);
     const char* labels[] = {"Juego base", "Última actualización", "DLC disponibles"};
     for (int row = 0; row < 3; ++row) {
         const auto area = DetailActionBounds(bounds, row);
         const auto focused = state.focused && state.action == row;
         if (focused) Fill(vg, area, nvgRGBA(0, 238, 252, 17), 6.f);
         Checkbox(vg, {bounds.x + 35.f * sx, bounds.y + (259.f + row * 29.f) * sy, 20.f * scale, 20.f * scale},
-            state.ready && state.selected[row], state.available[row], focused);
+            state.ready && state.available[row] && state.selected[row], state.available[row], focused);
         Text(vg, bounds.x + 66.f * sx, bounds.y + (269.f + row * 29.f) * sy, 17.f * scale,
             state.available[row] ? White : Muted, labels[row]);
+        if (row == 1 && state.update_status && *state.update_status)
+            Text(vg, bounds.x + bounds.w - 30.f * sx, bounds.y + (269.f + row * 29.f) * sy,
+                13.f * scale, Muted, state.update_status, NVG_ALIGN_RIGHT | NVG_ALIGN_MIDDLE);
     }
     DetailText(vg, area(351.f, 17.f), 12.f * scale, Muted, state.note);
     Button(vg, DetailActionBounds(bounds, 3), state.primary_label, state.focused && state.action == 3, state.primary_enabled,

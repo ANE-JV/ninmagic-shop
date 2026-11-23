@@ -216,7 +216,7 @@ auto GetCodeHint(Result rc) -> std::string {
             return "Your keys are missing or outdated. Dump prod.keys again with the latest Lockpick_RCM."_i18n;
 
         case Result_YatiHttpFileNotFound:
-            return "Refresh the shop catalog. If it persists, check the file path in Ownfoil and rescan the library."_i18n;
+            return "Refresh the catalog in NinMagic Shop. If it continues, ask your shop administrator to check the download link."_i18n;
         case Result_YatiHttpAccessDenied:
             return "Check the shop profile and that this account can download the file."_i18n;
         case Result_YatiHttpReadFailed:

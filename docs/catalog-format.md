@@ -24,6 +24,8 @@ Los metadatos están limitados a 32 MiB y 100000 registros por documento; las im
 
 ## Metadatos de la web existente
 
+Si una descarga funciona en Tinfoil y devuelve 404 al acceder desde la vista por carpetas, el servidor puede estar publicando enlaces distintos para ambos clientes. Un administrador puede configurar un índice JSON que publique sus enlaces directos y los identificadores de cada archivo. NinMagic Shop puede usar ese índice como otro perfil. El fallo documentado en la vista por carpetas se detalla en la [incidencia de Ownfoil](https://github.com/a1ex4/ownfoil/issues/319).
+
 Ownfoil clásico no incluye imágenes en sus enlaces HTML. La aplicación puede completar esos enlaces mediante la API web existente `/api/titles`: usa la misma cuenta en `/login` y mantiene la cookie únicamente en memoria durante esa lectura. No crea cuentas ni modifica el catálogo. Las imágenes de otro origen reciben una petición sin la contraseña o cookie del Ownfoil.
 
 El campo opcional «URL de carátulas web» admite un JSON existente con `games` o `files` (lista u objeto), y el bloque JSON público `catalogGamesData` de una página de NinMagic. El enlace es por ID de 16 dígitos exacto o por un campo `filename` exacto y no ambiguo. Nunca por similitud del título. Los campos de imagen aceptados incluyen `icon_url`, `iconUrl`, `coverUrl`, `cover`, `thumbnail` y `banner_url`/`bannerUrl`; pueden ser URL o un objeto con `url`. Las imágenes genéricas de placehold.it no cuentan como carátulas.

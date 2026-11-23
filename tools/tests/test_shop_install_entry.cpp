@@ -55,7 +55,10 @@ struct Async {
     bool IsRunning() const { return true; }
 };
 }
-namespace api { struct ShopDownload { std::string url, extension; }; }
+namespace api {
+struct ShopDownload { std::string url, extension; };
+struct ShopVersion { bool base{}; ShopDownload download; s64 version{}; bool version_known{}; std::string display{}; };
+}
 using Download = api::ShopDownload;
 struct Page { bool dlc{}, directory{}; std::string app_id, name; Download download; };
 Page MakeTitlePage(const Page& p) { return p; }
@@ -87,12 +90,12 @@ struct TitleMenu : std::enable_shared_from_this<TitleMenu> {
     void Layout() {}
     void BuildFacts() {}
     void StartGallery() {}
-    bool m_loaded{}, m_console_loaded{}, m_failed{}, m_update_selected{}, m_base_selected{};
+    bool m_loaded{}, m_console_loaded{}, m_failed{}, m_update_selected{}, m_base_selected{}, m_selection_ready{};
     bool m_dlc_selected{}, m_dlc_installed{}, base_available{true};
     struct Installed { bool installed{}; };
-    struct Version { bool base{}; Download download; };
     struct Content { Download download; };
-    struct Package { std::vector<Version> versions; std::vector<Content> dlc; } m_title;
+    struct Package { std::vector<api::ShopVersion> versions; std::vector<Content> dlc; } m_title;
+    s64 m_install_version{-1};
     Installed m_installed;
     std::vector<Installed> m_rows;
     std::vector<int> m_install_dlc;
@@ -116,8 +119,8 @@ struct TitleMenu : std::enable_shared_from_this<TitleMenu> {
     void QueueSelectedPackage() { assert(false); }
     void Install() { assert(false); }
     void LoadInstalled(std::stop_token) {}
-    void EnsureSelection() {}
-    void ChoosePanelVersion() {}
+    void EnsureSelection();
+    void ChoosePanelVersion();
     void ShowInstallOptions() { ++reviews; }
     void OpenFullPage();
     bool PollPreview();
@@ -196,7 +199,41 @@ static void CheckSlowServer(bool touch) {
     incomplete.ActivateDetailAction(3);
     assert(incomplete.reviews == 1 && App::notice.find("403") != std::string::npos);
 }
+static void CheckUpdateChoice(bool already_installed) {
+    TitleMenu title(0, "", {}, TitleMenu::Mode::FullPage);
+    Controller up{Button::DPAD_UP}, activate{Button::A};
+    title.m_detail_action = 3;
+    assert(!title.DetailActionAvailable(0) && !title.DetailActionAvailable(1));
+    title.m_title.versions = {{true, {"base", "nsp"}}, {false, {"patch", "nsz"}}};
+    title.m_loaded = true;
+    title.PollPreview();
+    assert(title.DetailActionAvailable(0) && title.DetailActionAvailable(1));
+    assert(!title.DetailActionAvailable(4) && title.m_base_selected && title.m_update_selected);
+    title.HandleDetailController(&up);
+    assert(title.m_detail_action == 1);
+    title.HandleDetailController(&activate);
+    assert(title.m_base_selected && !title.m_update_selected && title.m_install_version == 0);
+    title.HandleDetailController(&up);
+    title.HandleDetailController(&activate);
+    assert(!title.m_base_selected);
+    const auto update = title.DetailActionBounds(1);
+    const TouchInfo tap{true, update.x + 1, update.y + 1};
+    assert(title.HandleDetailTouch(&tap) && title.m_update_selected && !title.m_base_selected);
+    assert(title.m_install_version == 1);
+    title.OpenInstallOptions();
+    assert(title.reviews == 0);
+    title.m_installed.installed = already_installed;
+    title.m_console_loaded = true;
+    title.PollPreview();
+    assert(title.reviews == 1 && title.m_update_selected && title.m_install_version == 1);
+    assert(title.m_base_selected == !already_installed);
+}
+
 int main() {
+    CheckUpdateChoice(true);
+    CheckUpdateChoice(false);
+    assert(FormatInstallVersion({false, {"patch", "nsp"}}) == "Actualización");
+    assert(FormatInstallVersion({true, {"base", "nsp"}}) == "Base");
     CheckSlowServer(false);
     CheckSlowServer(true);
     std::cout << "Slow provider: selection opens immediately, A/touch opens review once packages are ready\n";

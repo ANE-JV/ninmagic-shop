@@ -58,7 +58,8 @@ def main():
         return source[start:source.index("\n}", start) + 2]
     handlers = [(menu, "void Menu::UpdatePreview("), (menu, "void Menu::OpenSelected(")]
     handlers += [(title, signature) for signature in (
-        "bool HasDownload(", "void TitleMenu::OpenFullPage(", "auto TitleMenu::HasBasePackage(",
+        "bool HasDownload(", "auto FormatVersion(", "auto FormatInstallVersion(", "void TitleMenu::OpenFullPage(",
+        "void TitleMenu::EnsureSelection(", "void TitleMenu::ChoosePanelVersion(", "auto TitleMenu::HasBasePackage(",
         "auto TitleMenu::HasUpdatePackage(", "auto TitleMenu::HasPackage(", "auto TitleMenu::PollPreview(",
         "void TitleMenu::OpenInstallOptions(", "auto TitleMenu::DetailActionAvailable(",
         "void TitleMenu::ActivateDetailAction(", "auto TitleMenu::HandleDetailTouch(",
