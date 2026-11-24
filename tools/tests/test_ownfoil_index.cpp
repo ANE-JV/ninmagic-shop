@@ -1,4 +1,5 @@
 #include "utils/ownfoil_index.hpp"
+#include "utils/ownfoil_direct_index.hpp"
 #include "utils/ownfoil_install_plan.hpp"
 #include <cassert>
 #include <iostream>
@@ -6,7 +7,49 @@
 #include <fstream>
 #include <iterator>
 
+static void CheckDirectIndex() {
+    namespace direct = sphaira::ownfoil::direct_index;
+    namespace index = sphaira::ownfoil::index;
+    const std::string server = "https://shop.invalid/tenant";
+    const std::string original = R"({"schema":1,"server":"https://SHOP.invalid:443/tenant/","files":[
+      {"url":"/api/get_game/1#Game%23one%3F%25%20copy.NSP","app_id":"0100123456780000","title_id":"0100123456780000","kind":"base","version":0,"size":15032385536},
+      {"url":"/api/get_game/2#GameUpdate.nsz","app_id":"0500123456780807","title_id":"0500123456780000","kind":"update","version":65536,"size":11},
+      {"url":"/api/get_game/3#extra.xci","app_id":"0100123456781001","title_id":"0100123456780000","kind":"dlc","version":1,"size":12}]})";
+    std::vector<index::File> files;
+    std::string error;
+    assert(direct::Parse(original, server, files, error) && files.size() == 3);
+    assert(files[0].url == "https://shop.invalid/api/get_game/1" && files[0].name == "Game#one?% copy");
+    assert(files[0].size == 15032385536LL && files[0].extension == "nsp" && files[0].kind == index::Kind::Base);
+    assert(files[1].kind == index::Kind::Update && files[1].title_id == "0500123456780000" && files[1].version_known);
+    assert(files[2].kind == index::Kind::Dlc && files[2].extension == "xci");
+    const auto rejects = [&](std::string_view old, std::string_view replacement) {
+        auto value = original;
+        value.replace(value.find(old), old.size(), replacement);
+        assert(!direct::Parse(value, server, files, error) && files.empty() && !error.empty());
+    };
+    for (auto bad : {"https://other.invalid/api/get_game/1", "//other.invalid/api/get_game/1",
+            "/api/get_game/0", "/api/get_game/-1", "/api/get_game/18446744073709551616",
+            "/api/get_game/1?q=3", "/api/get_game/1/../3", "/api/get_game/%31", "/api/files/1",
+            "/api/get_game/1\\u0000admin"}) rejects("/api/get_game/1", bad);
+    for (auto bad : {"missing.txt", "folder%2Fgame.nsp", "folder%5cgame.nsp", "x%00.nsp",
+                     "x%ZZ.nsp", "foo.nsp?query", "foo#game.nsp"}) rejects("Game%23one%3F%25%20copy.NSP", bad);
+    rejects(":443/tenant", ":444/tenant");
+    rejects("/tenant/", "/Tenant/");
+    rejects("https://SHOP", "http://SHOP");
+    rejects("https://SHOP", "https://user@SHOP");
+    rejects("\"schema\":1", "\"schema\":true");
+    rejects("0500123456780807", "05001234567808078");
+    rejects("0500123456780807", "0000000000000000");
+    rejects("\"kind\":\"update\"", "\"kind\":\"base\"");
+    rejects("/api/get_game/2", "/api/get_game/1");
+    rejects("\"size\":11", "\"size\":-1");
+    rejects("\"version\":65536", "\"version\":4294967296");
+    assert(direct::Parse(R"({"schema":1,"server":"https://shop.invalid/tenant","files":[]})", server, files, error));
+    assert(files.empty() && error.empty());
+}
+
 int main(int argc, char** argv) {
+    CheckDirectIndex();
     using namespace sphaira::ownfoil::index;
     std::vector<File> files;
     std::string error;

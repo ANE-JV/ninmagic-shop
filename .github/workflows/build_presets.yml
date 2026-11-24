@@ -29,6 +29,7 @@ jobs:
           python3 tools/test-transport.py
           python3 tools/test-curl-legacy.py
           python3 tools/test-ownfoil.py --yyjson build/Shop/_deps/yyjson-src/src
+          python3 tools/tests/test_export_ownfoil_index.py
           python3 tools/test-profiles.py --minini build/Shop/_deps/minini-src
           python3 tools/test-updater.py --yyjson build/Shop/_deps/yyjson-src/src
       - name: Verify standalone executable

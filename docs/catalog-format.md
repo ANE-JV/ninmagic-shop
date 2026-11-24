@@ -44,6 +44,23 @@ Ejemplo de catálogo JSON con archivos y metadatos:
 
 La página pública `/juegos` de NinMagic expone solamente los registros de su página visible. Leer esos datos no equivale a un índice global y no permite acceder a filtros, páginas o descargas que requieran sesión/VIP. Para cubrir todo el catálogo se necesita un endpoint autorizado que publique el conjunto correspondiente. Otro origen configurado se consulta sin reutilizar la cuenta o cookie del Ownfoil.
 
+
+## Catálogo directo desde la microSD
+
+Esta opción usa el archivo indicado en el perfil de tienda. La app lee el JSON al abrir la tienda y usa el usuario y la contraseña de ese perfil para descargar por HTTPS. Cada enlace identifica un archivo de la misma instancia de Ownfoil. Si cambias el servidor o sustituyes archivos en Ownfoil, vuelve a exportar el catálogo.
+
+1. Exporta el catálogo desde la base de la instancia que atiende el dominio de descarga. `tools/export-ownfoil-index.py` abre SQLite en modo de solo lectura y escribe el índice en la salida estándar. Si solo quieres comprobar un juego, añade `--title` y su identificador de 16 dígitos.
+2. Copia el JSON a `config/NinMagicShop/indices/` en la microSD. En **Añadir tienda** o **Editar tienda**, pon la URL HTTPS de esa instancia y su cuenta, y escribe el nombre del JSON en **Archivo de catálogo (microSD)**.
+3. Abre la tienda. Para leer una copia nueva del mismo archivo, usa **Secciones → Actualizar catálogo**.
+
+Desde una terminal del NAS, con Docker disponible y el script en la carpeta actual, puedes exportar así. Sustituye el nombre del contenedor y el dominio por los de tu instalación.
+
+```sh
+docker exec -i ownfoil python - --database /app/config/ownfoil.db --server https://tienda.example < export-ownfoil-index.py > ownfoil-nuevo.json
+```
+
+Guarda el JSON en una carpeta privada. Cada exportación incluye el juego base, las actualizaciones y los DLC del filtro cuando Ownfoil registra un archivo por cada identidad. El exportador cuenta los archivos que omite si un mismo contenedor está asociado a varios contenidos o carece de datos válidos. La app admite hasta 65.536 entradas y 16 MiB.
+
 ## Pruebas
 
 `python tools/test-ownfoil.py --yyjson RUTA_AL_SRC_DE_YYJSON` compila y ejecuta las pruebas del parser de producción con un compilador del PC. Cubre JSON/HTML, tamaños de 64 bits, rutas/consolas, IDs personalizados sin agrupación inferida, paquetes sin ID independientes, arte por ID/filename exactos, nombres ambiguos, actualización de metadatos y JSON público de NinMagic. Los argumentos opcionales `--private-fixture` y `--private-metadata` leen capturas locales y sólo imprimen cantidades, nunca títulos o credenciales. Las pruebas no descargan ni instalan juegos.

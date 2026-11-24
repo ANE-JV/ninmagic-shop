@@ -11,6 +11,15 @@ int main(int argc, char** argv) {
     const std::string filename = argv[1];
     assert(filename.ends_with("profiles.ini"));
     Config first;
+    assert(first.direct_catalog.empty());
+    assert(profile::ValidDirectCatalogName("catalogo-1_Juegos.JSON"));
+    assert(profile::ValidDirectCatalogName(std::string(123, 'a') + ".json"));
+    for (const auto* invalid : {"", ".json", ".hidden.json", "a..b.json", "../test.json",
+            "folder/test.json", "folder\\test.json", "sdmc:test.json", "https://example.invalid/list.json",
+            "bad?.json", "file%2f.json", "foo.txt", "a b.json", "a.json\n"})
+        assert(!profile::ValidDirectCatalogName(invalid));
+    assert(!profile::ValidDirectCatalogName(std::string(124, 'a') + ".json"));
+    assert(!profile::ValidDirectCatalogName(std::string("a\0b.json", 8)));
     first.uid="pending-fixture-a";first.server_uid="old-server";first.name="Tienda A";
     first.local_address="https://old.invalid:8443/library/";first.remote_address="https://alternative.invalid/";
     first.user="fixture-user";first.pass="fixture-password";first.resolved_url=first.remote_address;
@@ -40,6 +49,19 @@ int main(int argc, char** argv) {
     auto name_only=changes;name_only.name="Solo nombre";name_only.local_address=first.local_address;name_only.remote_address=first.remote_address;
     name_only.user=first.user;name_only.backend=first.backend;
     const auto renamed=profile::Apply(first,name_only);assert(renamed.server_uid==first.server_uid&&renamed.resolved_url==first.resolved_url&&renamed.legacy_html&&renamed.json_index);
+    auto local_catalog = name_only;
+    local_catalog.direct_catalog = "biblioteca.json";
+    const auto with_catalog = profile::Apply(first, local_catalog);
+    assert(with_catalog.direct_catalog == "biblioteca.json" && with_catalog.uid == first.uid);
+    assert(with_catalog.server_uid.empty() && with_catalog.resolved_url.empty() && with_catalog.revalidate_artwork);
+    assert(!with_catalog.legacy_html && !with_catalog.json_index && with_catalog.pass == first.pass && with_catalog.favorites == first.favorites);
+    assert(profile::WriteFields(with_catalog, write));
+    assert(read(first.uid, "direct_catalog") == "biblioteca.json" && read(second.uid, "direct_catalog").empty());
+    const auto cleared = profile::Apply(with_catalog, name_only);
+    assert(cleared.direct_catalog.empty() && profile::WriteFields(cleared, write) && read(first.uid, "direct_catalog").empty());
+    auto bad_catalog = with_catalog;
+    bad_catalog.direct_catalog = "../otra-tienda.json";
+    assert(!profile::WriteFields(bad_catalog, [](auto&, auto&, auto&) { assert(false); return true; }));
     auto credentials_only=name_only;credentials_only.user="wrong-fixture-user";
     const auto failed_auth=profile::Apply(first,credentials_only);
     assert(failed_auth.uid==first.uid&&failed_auth.resolved_url.empty()&&failed_auth.server_uid.empty()&&!failed_auth.legacy_html&&!failed_auth.json_index);

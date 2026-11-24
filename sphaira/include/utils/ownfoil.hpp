@@ -48,6 +48,7 @@ private:
     ui::SidebarEntryTextInput* m_remote_address{};
     ui::SidebarEntryTextInput* m_artwork_search_url{};
     ui::SidebarEntryTextInput* m_metadata_url{};
+    ui::SidebarEntryTextInput* m_direct_catalog{};
     ui::SidebarEntryTextInput* m_port{};
     ui::SidebarEntryTextInput* m_path{};
     ui::SidebarEntryTextInput* m_user{};

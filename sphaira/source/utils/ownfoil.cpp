@@ -69,6 +69,8 @@ void OwnfoilForm::SetupButtons() {
         "Puerto del servidor. Vacío usa el predeterminado: HTTPS 443 / HTTP 80.");
     m_path = this->Add<SidebarEntryTextInput>("Ruta del catálogo", path, "", "", -1, PATH_MAX,
         "Ejemplo: / o /mi-tienda/. Vacío vuelve a la raíz del servidor.");
+    m_direct_catalog = this->Add<SidebarEntryTextInput>("Archivo de catálogo (microSD)", m_config.direct_catalog, "", "", -1, profile::DirectCatalogNameLimit,
+        "Opcional. Copia el archivo en /config/NinMagicShop/indices/ y escribe aquí su nombre, por ejemplo biblioteca.json. Déjalo vacío para usar el catálogo del servidor.");
 
     m_remote_address = this->Add<SidebarEntryTextInput>(
         "URL alternativa (opcional)", m_config.remote_address, "", "", -1, PATH_MAX,
@@ -134,6 +136,11 @@ void OwnfoilForm::SetupButtons() {
             curl_free(value);
         }
         const auto& alternative = m_remote_address->GetValue();
+        const auto& catalog = m_direct_catalog->GetValue();
+        if (!catalog.empty() && !profile::ValidDirectCatalogName(catalog)) {
+            App::Notify("Nombre de catálogo inválido. Usa letras sin acentos, números, guion o guion bajo y termina en .json. Ejemplo: biblioteca.json.");
+            return;
+        }
         if (!m_artwork_search_url->GetValue().empty() && !IsSafeAddress(m_artwork_search_url->GetValue())) {
             App::Notify("Revisa la URL pública de carátulas.");
             return;
@@ -149,7 +156,7 @@ void OwnfoilForm::SetupButtons() {
         auto edited = profile::Apply(m_original, {
             .name=m_name->GetValue(), .local_address=primary, .remote_address=alternative,
             .user=m_user->GetValue(), .metadata_url=m_metadata_url->GetValue(),
-            .artwork_search_url=m_artwork_search_url->GetValue(), .backend=m_config.backend,
+            .artwork_search_url=m_artwork_search_url->GetValue(), .direct_catalog=catalog, .backend=m_config.backend,
             .password=m_password_edit
         });
         if (!SaveConfig(edited)) {
@@ -238,6 +245,8 @@ void LoadConfigs(Configs& out_configs) {
             e->back().artwork_search_url = Value;
         } else if (!std::strcmp(Key, "metadata_url")) {
             e->back().metadata_url = Value;
+        } else if (!std::strcmp(Key, "direct_catalog")) {
+            e->back().direct_catalog = Value;
         } else if (!std::strcmp(Key, "remote_address")) {
             e->back().remote_address = Value;
         } else if (!std::strcmp(Key, "user")) {

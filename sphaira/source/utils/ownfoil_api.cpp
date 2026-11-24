@@ -1,5 +1,6 @@
 #include "utils/ownfoil_api.hpp"
 #include "utils/ownfoil_index.hpp"
+#include "utils/ownfoil_direct_index.hpp"
 #include "utils/ownfoil_snapshot.hpp"
 #include "utils/ownfoil_diagnostic.hpp"
 #include "utils/ownfoil_catalog.hpp"
@@ -492,6 +493,37 @@ auto FetchWebArtwork(const std::string& directory, const Config& config, std::st
     return true;
 }
 
+auto ReadDirectCatalog(const std::string& url, const Config& config, std::stop_token token,
+    std::vector<index::File>& files, std::string& error) -> bool {
+    if (!profile::ValidDirectCatalogName(config.direct_catalog)) {
+        error = "El nombre del catálogo de la microSD no es válido.";
+        return false;
+    }
+    const auto path = std::string{profile::DirectCatalogDirectory} + config.direct_catalog;
+    std::unique_ptr<std::FILE, decltype(&std::fclose)> file{std::fopen(path.c_str(), "rb"), &std::fclose};
+    if (!file) {
+        error = "No encontré el catálogo en /config/NinMagicShop/indices/.";
+        return false;
+    }
+    if (std::fseek(file.get(), 0, SEEK_END) != 0) {
+        error = "No se pudo leer el catálogo de la microSD.";
+        return false;
+    }
+    const auto size = std::ftell(file.get());
+    if (size <= 0 || static_cast<std::size_t>(size) > direct_index::MaxBytes) {
+        error = "El catálogo de la microSD está vacío o supera el tamaño admitido.";
+        return false;
+    }
+    std::string data(static_cast<std::size_t>(size), '\0');
+    if (std::fseek(file.get(), 0, SEEK_SET) != 0 ||
+        std::fread(data.data(), 1, data.size(), file.get()) != data.size() ||
+        std::fgetc(file.get()) != EOF || std::ferror(file.get())) {
+        error = "No se pudo leer el catálogo de la microSD.";
+        return false;
+    }
+    return !token.stop_requested() && direct_index::Parse(data, url, files, error);
+}
+
 auto FetchIndex(const std::string& url, const Config& config, std::stop_token token,
     std::shared_ptr<const std::vector<index::File>>& files, std::string& error, bool refresh = false, bool* legacy_result = nullptr,
     const ConnectionDiagnostic* diagnostic = nullptr, IndexScope scope = IndexScope::Catalog, bool* header_result = nullptr, bool* refused_result = nullptr) -> bool {
@@ -500,12 +532,26 @@ auto FetchIndex(const std::string& url, const Config& config, std::stop_token to
         std::scoped_lock lock(g_index_mutex);
         const auto detail = g_detail_index_cache.find(url);
         const auto& cache = scope == IndexScope::GameFolder && detail != g_detail_index_cache.end() ? detail->second.catalog : g_index_cache;
-        if (cache.Matches(url, config.user, config.pass)) {
+        if (cache.Matches(url, config.user, config.pass, config.direct_catalog)) {
             files = cache.files;
             if (legacy_result) *legacy_result = cache.legacy;
             if (header_result) *header_result = cache.legacy_headers;
             return true;
         }
+    }
+    if (!config.direct_catalog.empty()) {
+        auto parsed = std::make_shared<std::vector<index::File>>();
+        const bool ok = scope == IndexScope::Catalog && ReadDirectCatalog(url, config, token, *parsed, error);
+        if (diagnostic) diagnostic->Event("source=sd_catalog accepted=" + std::to_string(ok)
+            + " entries=" + std::to_string(parsed->size()));
+        if (!ok || token.stop_requested()) return false;
+        index::ApplyNinMagicPlatforms(*parsed, config.artwork_search_url);
+        if (legacy_result) *legacy_result = false;
+        if (header_result) *header_result = false;
+        files = parsed;
+        std::scoped_lock lock(g_index_mutex);
+        g_index_cache = {url, config.user, config.pass, files, false, false, config.direct_catalog};
+        return true;
     }
     // Catalogues are metadata, not packages: refuse an accidental file endpoint
     // before it can grow the metadata buffer to gigabytes.
@@ -816,7 +862,7 @@ auto FetchIndexTitle(const std::string& base_url, const Config& config, std::sto
 auto TryConnect(const std::string& url, const Config& config, std::stop_token token, ConnectResult& out, const ConnectionDiagnostic& diagnostic) -> bool {
     if (token.stop_requested() || !IsSafeAddress(url)) return false;
     log_write("[OWNFOIL] Connecting to configured server\n");
-    if (config.backend != Backend::JsonIndex && config.backend != Backend::LegacyHtml) {
+    if (config.direct_catalog.empty() && config.backend != Backend::JsonIndex && config.backend != Backend::LegacyHtml) {
         const auto result = curl::Api().ToMemory(curl::Url{url}, curl::CustomRequest{"OPTIONS"},
             curl::UserPass{config.user, config.pass}, curl::PreemptiveAuth{true},
             curl::Flags{curl::Flag_KeepErrorBody | curl::Flag_ConnectionDiagnostic}, curl::StopToken{token}, curl::MemoryLimit{1024 * 1024},
@@ -1602,7 +1648,7 @@ void InvalidateCatalog(const std::string& base_url, const Config& config) {
         g_native_search = {};
     if (g_native_library.Account(base_url, config)) g_native_library = {};
     std::erase_if(g_public_artwork_cache, [&config](const auto& entry) { return entry.first.starts_with(config.artwork_search_url + '#'); });
-    g_index_cache.Invalidate(base_url, config.user, config.pass);
+    g_index_cache.Invalidate(base_url, config.user, config.pass, config.direct_catalog);
     std::erase_if(g_detail_index_cache, [&base_url, &config](const auto& entry) {
         return entry.second.catalog.user == config.user && entry.second.catalog.pass == config.pass && IsSameOrigin(base_url, entry.first);
     });
@@ -1621,7 +1667,7 @@ auto CachedPlatforms(const std::string& base_url, const Config& config) -> std::
         return platforms;
     }
     std::scoped_lock lock(g_index_mutex, g_browse_mutex);
-    if (g_index_cache.Matches(base_url, config.user, config.pass) && g_browse.source.lock() == g_index_cache.files && g_browse.index)
+    if (g_index_cache.Matches(base_url, config.user, config.pass, config.direct_catalog) && g_browse.source.lock() == g_index_cache.files && g_browse.index)
         return g_browse.index->platforms;
     return {};
 }
@@ -1629,7 +1675,7 @@ auto CachedPlatforms(const std::string& base_url, const Config& config) -> std::
 auto CachedCatalogStatus(const std::string& base_url, const Config& config) -> CatalogStatus {
     CatalogStatus result;
     std::scoped_lock lock(g_index_mutex, g_browse_mutex);
-    if (!g_index_cache.Matches(base_url, config.user, config.pass) || g_browse.source.lock() != g_index_cache.files || !g_browse.index) return result;
+    if (!g_index_cache.Matches(base_url, config.user, config.pass, config.direct_catalog) || g_browse.source.lock() != g_index_cache.files || !g_browse.index) return result;
     result.folders = static_cast<s64>(g_browse.index->folder_count);
     result.mapped_folders = static_cast<s64>(g_browse.index->mapped_folders);
     result.unresolved_folders = std::max<s64>(0, result.folders - result.mapped_folders);

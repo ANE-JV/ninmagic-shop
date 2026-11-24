@@ -1265,7 +1265,7 @@ void TitleMenu::ShowInstallOptions() {
     auto options = std::make_unique<DetailSidebar>("Install"_i18n, GetName(), weak_from_this().lock());
     ON_SCOPE_EXIT(App::Push(std::move(options)));
 
-    options->Add<SidebarEntryCallback>("Install options"_i18n, [](){
+    const auto preferences = options->Add<SidebarEntryCallback>("Install options"_i18n, [](){
         App::DisplayInstallOptions(false);
     });
 
@@ -1344,9 +1344,7 @@ void TitleMenu::ShowInstallOptions() {
         ? "This add-on is already installed."_i18n
         : "Nothing to install: the console already has this version or a newer one, and no add-on is ticked."_i18n);
 
-    // the menu opens on Install, which is what it is opened for: everything
-    // above it only qualifies that press.
-    options->SetDefaultEntry(*install);
+    options->SetDefaultEntry(HasSomethingToInstall() ? *install : preferences);
 }
 
 void TitleMenu::Install() {
@@ -1458,14 +1456,14 @@ void TitleMenu::ShowAddons(const std::function<void()>& changed) {
 }
 
 auto TitleMenu::GetInstallLabel() const -> std::string {
+    if (!HasSomethingToInstall()) return "Sin contenido por instalar";
     // a dlc, an add-on, or a game the console hasn't got is always an install.
     const auto ticked = std::find(m_install_dlc.begin(), m_install_dlc.end(), 1) != m_install_dlc.end();
     if (m_page.dlc || ticked || !m_installed.installed || m_install_version < 0 || m_install_version >= static_cast<s64>(m_title.versions.size())) {
         return "Install"_i18n;
     }
 
-    // the chosen version alone. the installed one installs nothing, and is left
-    // called Install for the greyed-out entry to explain.
+    // The chosen version is a real change for the installed game.
     const auto& selected_version = m_title.versions[m_install_version];
     if (!selected_version.version_known || (!selected_version.base && selected_version.version == 0)) return "Install"_i18n;
     const auto chosen = selected_version.version;

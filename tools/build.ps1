@@ -96,6 +96,8 @@ if ($LASTEXITCODE -ne 0) { throw 'HTTP transport regressions failed. No release 
 if ($LASTEXITCODE -ne 0) { throw 'Legacy libcurl wire regressions failed. No release was packaged.' }
 & $Python (Join-Path $PSScriptRoot 'test-ownfoil.py') --yyjson (Join-Path $stageRoot 'build-release/_deps/yyjson-src/src') --output (Join-Path $stageRoot 'host-tests/ownfoil')
 if ($LASTEXITCODE -ne 0) { throw 'Ownfoil parser regressions failed. No release was packaged.' }
+& $Python (Join-Path $PSScriptRoot 'tests/test_export_ownfoil_index.py')
+if ($LASTEXITCODE -ne 0) { throw 'Ownfoil catalog export regressions failed. No release was packaged.' }
 & $Python (Join-Path $PSScriptRoot 'test-profiles.py') --minini (Join-Path $stageRoot 'build-release/_deps/minini-src') --output (Join-Path $stageRoot 'host-tests/profiles')
 if ($LASTEXITCODE -ne 0) { throw 'Profile persistence regressions failed. No release was packaged.' }
 & $Python (Join-Path $PSScriptRoot 'test-updater.py') --yyjson (Join-Path $stageRoot 'build-release/_deps/yyjson-src/src') --output (Join-Path $stageRoot 'host-tests/updater')

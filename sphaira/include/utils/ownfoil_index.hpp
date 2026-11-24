@@ -44,11 +44,14 @@ struct CatalogCache {
     std::string url, user, pass;
     std::shared_ptr<const std::vector<File>> files;
     bool legacy{}, legacy_headers{};
-    auto Matches(const std::string& requested_url, const std::string& requested_user, const std::string& requested_pass) const -> bool {
-        return files && url == requested_url && user == requested_user && pass == requested_pass;
+    std::string direct_catalog{};
+    auto Matches(const std::string& requested_url, const std::string& requested_user, const std::string& requested_pass,
+                 std::string_view requested_catalog = {}) const -> bool {
+        return files && url == requested_url && user == requested_user && pass == requested_pass && direct_catalog == requested_catalog;
     }
-    void Invalidate(const std::string& requested_url, const std::string& requested_user, const std::string& requested_pass) {
-        if (Matches(requested_url, requested_user, requested_pass)) { files.reset(); url.clear(); user.clear(); pass.clear(); }
+    void Invalidate(const std::string& requested_url, const std::string& requested_user, const std::string& requested_pass,
+                    std::string_view requested_catalog = {}) {
+        if (Matches(requested_url, requested_user, requested_pass, requested_catalog)) *this = {};
     }
 };
 inline auto String(yyjson_val* obj, const char* key) -> std::string {
@@ -219,12 +222,14 @@ inline auto InstallTarget(uint64_t parent, const std::string& explicit_id, bool 
     // content without an explicit ID installs the selected container unfiltered.
     return (parent >> 56) == 1 ? parent ^ uint64_t(0x800) : 0;
 }
-inline auto Extension(std::string text) -> std::string {
-    text = Lower(text.substr(0, text.find_first_of("?#")));
+inline auto FilenameExtension(std::string_view text) -> std::string {
     const auto dot = text.rfind('.');
-    if (dot == std::string::npos) return {};
-    auto ext = text.substr(dot + 1);
+    if (dot == text.npos) return {};
+    auto ext = Lower(std::string{text.substr(dot + 1)});
     return ext == "nsp" || ext == "nsz" || ext == "xci" || ext == "xcz" ? ext : "";
+}
+inline auto Extension(std::string_view url) -> std::string {
+    return FilenameExtension(url.substr(0, url.find_first_of("?#")));
 }
 inline auto CleanName(std::string text) -> std::string {
     if (const auto dot = text.rfind('.'); dot != std::string::npos) {
@@ -244,21 +249,17 @@ inline auto CleanName(std::string text) -> std::string {
     while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front()))) text.erase(0, 1);
     return text;
 }
-inline auto Parse(const char* bytes, size_t size, std::vector<File>& out, std::string& error) -> bool {
+inline auto ParseRoot(yyjson_val* root, std::vector<File>& out, std::string& error) -> bool {
     out.clear();
-    yyjson_doc* doc = yyjson_read(bytes, size, YYJSON_READ_NOFLAG);
-    if (!doc) { error = "The server did not return a plain JSON shop index"; return false; }
-    const auto root = yyjson_doc_get_root(doc);
     const auto files = yyjson_obj_get(root, "files");
     if (!yyjson_is_arr(files)) {
         error = "The JSON index has no files array (encrypted indices are not supported)";
-        yyjson_doc_free(doc);
         return false;
     }
     const auto titledb = yyjson_obj_get(root, "titledb");
     size_t i, max;
     yyjson_val* item;
-    if (yyjson_arr_size(files) > 100000) { error = "El catálogo supera 100000 entradas."; yyjson_doc_free(doc); return false; }
+    if (yyjson_arr_size(files) > 100000) { error = "El catálogo supera 100000 entradas."; return false; }
     yyjson_arr_foreach(files, i, max, item) {
         File file;
         file.url = yyjson_is_str(item) ? yyjson_get_str(item) : String(item, "url");
@@ -268,7 +269,7 @@ inline auto Parse(const char* bytes, size_t size, std::vector<File>& out, std::s
         if (fragment == std::string::npos) filename = filename.substr(filename.find_last_of('/') + 1);
         filename = Decode(filename);
         file.url = file.url.substr(0, fragment);
-        file.extension = Extension(filename);
+        file.extension = FilenameExtension(filename);
         if (file.extension.empty()) file.extension = Extension(file.url);
         file.directory = yyjson_is_true(yyjson_obj_get(item, "directory")) || yyjson_is_true(yyjson_obj_get(item, "folder"));
         if (file.extension.empty() && !file.directory) continue;
@@ -346,8 +347,12 @@ inline auto Parse(const char* bytes, size_t size, std::vector<File>& out, std::s
         if (file.banner.empty()) file.banner = file.icon;
         out.emplace_back(std::move(file));
     }
-    yyjson_doc_free(doc);
     return true;
+}
+inline auto Parse(const char* bytes, size_t size, std::vector<File>& out, std::string& error) -> bool {
+    std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)> doc{yyjson_read(bytes, size, YYJSON_READ_NOFLAG), yyjson_doc_free};
+    if (!doc) { out.clear(); error = "The server did not return a plain JSON shop index"; return false; }
+    return ParseRoot(yyjson_doc_get_root(doc.get()), out, error);
 }
 
 // Artwork is supplemental metadata: it never changes package identity, kind or

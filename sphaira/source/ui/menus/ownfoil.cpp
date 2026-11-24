@@ -319,7 +319,7 @@ void Menu::SelectPlatform(const std::string& platform) {
     FreeEntries(); m_pending_page.reset(); LoadPage(0);
 }
 void Menu::ShowServerFolders() {
-    if (!m_config.json_index || m_base_url.empty() || m_connecting) return;
+    if (!m_config.json_index || !m_config.direct_catalog.empty() || m_base_url.empty() || m_connecting) return;
     if (!m_directory_stack.empty()) m_base_url = m_directory_stack.front();
     m_directory_stack.clear(); m_folder_names.clear();
     m_platform.clear(); m_search.clear(); m_category = 0;
@@ -1032,7 +1032,11 @@ void Menu::ConnectTo(const sphaira::ownfoil::Config& config) {
                 if (!info.motd.empty()) {
                     App::Notify(info.name + ": " + info.motd);
                 }
-                App::Notify(info.name + (connect_result.used_remote ? ": connected via remote address"_i18n : ": connected via local network"_i18n));
+                if (!connected_config.direct_catalog.empty()) {
+                    App::Notify(info.name + ": catálogo de la microSD");
+                } else {
+                    App::Notify(info.name + (connect_result.used_remote ? ": connected via remote address"_i18n : ": connected via local network"_i18n));
+                }
 
                 // the entry on disk moved under the list, so pick the change up.
                 if (saved_changed) {
@@ -1296,7 +1300,7 @@ void Menu::ShowCategories() {
     ON_SCOPE_EXIT(App::Push(std::move(panel)));
 
     panel->Add<SidebarEntryCallback>("Actualizar catálogo", [this] { RefreshCatalog(); }, true);
-    if (m_config.json_index) panel->Add<SidebarEntryCallback>("Ver carpetas del servidor", [this] { ShowServerFolders(); }, true,
+    if (m_config.json_index && m_config.direct_catalog.empty()) panel->Add<SidebarEntryCallback>("Ver carpetas del servidor", [this] { ShowServerFolders(); }, true,
         "Explora también las carpetas que aún no tienen un juego identificado.");
     if (!m_directory_stack.empty()) panel->Add<SidebarEntryCallback>("Volver a la carpeta anterior", [this] { GoUp(); }, true);
     for (const auto& entry : m_entries) {

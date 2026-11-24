@@ -1,4 +1,4 @@
-# NinMagic Shop 0.1.7 — beta
+# NinMagic Shop 0.1.8 — beta
 
 Tienda para Nintendo Switch con Atmosphère. Acceso a tu servidor, catálogo con carátulas, búsqueda, favoritos y cola de instalación. Proyecto separado de las demás aplicaciones NinMagic.
 
@@ -6,7 +6,7 @@ Deriva de [Sphaira 1.1.1](https://github.com/NaGaa95/sphaira), cuyo cliente Ownf
 
 ## Instalación
 
-Descarga [NinMagic-Shop-0.1.7.zip](https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/main/releases/0.1.7/NinMagic-Shop-0.1.7.zip) y extráelo en la raíz de la microSD. La aplicación queda en:
+Descarga [NinMagic-Shop-0.1.8.zip](https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/main/releases/0.1.8/NinMagic-Shop-0.1.8.zip) y extráelo en la raíz de la microSD. La aplicación queda en:
 
 ```
 sdmc:/switch/NinMagicShop/NinMagic-Shop.nro
@@ -85,6 +85,13 @@ La descarga se fija a un commit de este repositorio y comprueba tamaño, SHA-256
 - `config/NinMagicShop/`: perfiles, preferencias y estado del actualizador.
 
 Los perfiles guardados contienen las credenciales en la microSD. No compartas esa carpeta como parte de un pack público. Los ZIP publicados contienen la aplicación y sus licencias, sin perfiles personales ni juegos.
+
+## Cambios de 0.1.8
+
+- Cada tienda puede leer un catálogo de enlaces directos desde la microSD. Los archivos se agrupan por título y versión al abrir el catálogo, así que la ficha puede mostrarlos sin pedir la carpeta de cada juego.
+- El menú de instalación indica «Sin contenido por instalar» cuando la consola ya tiene todo lo seleccionado.
+
+Consulta [cómo exportar y abrir un catálogo de la microSD](docs/catalog-format.md#catálogo-directo-desde-la-microsd).
 
 ## Cambios de 0.1.7
 
