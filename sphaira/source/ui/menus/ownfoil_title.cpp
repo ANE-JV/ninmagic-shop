@@ -799,8 +799,37 @@ void TitleMenu::DrawPreviewSummary(NVGcontext* vg, const Vec4& bounds, const api
     sphaira::ui::shop::DrawDetailPanel(vg, bounds, state);
 }
 
+void TitleMenu::OnFocusGained() {
+    MenuBase::OnFocusGained();
+    if (!IsFullPage()) return;
+    const auto rating = sphaira::ownfoil::GetGameRating(m_config.uid, m_page.game_id);
+    if (!rating) {
+        RemoveAction(Button::X);
+        return;
+    }
+    const auto hint = *rating ? "Votar (" + std::to_string(*rating) + "/5)" : "Votar";
+    SetAction(Button::X, Action{hint, [this, current = *rating] { ShowRatingPicker(current); }});
+}
+
+void TitleMenu::ShowRatingPicker(int current) {
+    auto picker = std::make_unique<DetailSidebar>("Votar", m_page.dlc ? m_page.game_name : GetName(), weak_from_this().lock());
+    for (int stars = 1; stars <= 5; ++stars) {
+        auto label = std::to_string(stars) + (stars == 1 ? " estrella" : " estrellas");
+        if (stars == current) label += " · Tu voto";
+        auto* entry = picker->Add<SidebarEntryCallback>(label, [this, stars] {
+            if (sphaira::ownfoil::SetGameRating(m_config.uid, m_page.game_id, stars))
+                App::Notify("Voto guardado · " + std::to_string(stars) + "/5");
+            else
+                App::Notify("No se pudo guardar tu voto en la microSD.");
+        }, true);
+        if (stars == current) picker->SetDefaultEntry(entry);
+    }
+    App::Push(std::move(picker));
+}
+
 void TitleMenu::Update(Controller* controller, TouchInfo* touch) {
     if (PollPreview()) return;
+    if (controller->GotDown(Button::X) && FireAction(Button::X)) return;
     if (HandleDetailTouch(touch)) { m_detail_focused = true; return; }
     if (m_detail_focused && (touch->is_clicked || touch->is_scroll)) m_detail_focused = false;
     if (m_detail_focused) { m_detail_focused = HandleDetailController(controller); return; }

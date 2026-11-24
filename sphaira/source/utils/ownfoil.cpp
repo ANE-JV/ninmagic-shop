@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cstring>
 #include <cstdio>
+#include <string_view>
 #include <minIni.h>
 #include <curl/curl.h>
 #include <cctype>
@@ -22,6 +23,18 @@ namespace {
 using namespace sphaira::ui;
 
 #define OWNFOIL_INI_PATH "/config/NinMagicShop/ownfoil.ini"
+constexpr auto RATINGS_PATH = "/config/NinMagicShop/ratings.ini";
+
+auto RatingKey(const std::string& uid, const std::string& game_id) -> std::string {
+    if (uid.empty() || uid.find_first_of("[]=\r\n") != std::string::npos || uid.find('\0') != std::string::npos) return {};
+    std::string_view digits = game_id;
+    if (digits.starts_with("package-")) digits.remove_prefix(8);
+    if (digits.size() != 16 || digits.find_first_not_of("0123456789abcdefABCDEF") != std::string_view::npos
+        || (digits.size() == game_id.size() && digits == "0000000000000000")) return {};
+    std::string key = game_id;
+    std::transform(key.end() - 16, key.end(), key.end() - 16, [](unsigned char c) { return std::toupper(c); });
+    return key;
+}
 
 constexpr const char* PLACEHOLDER_UID_PREFIX = "pending-";
 
@@ -290,7 +303,8 @@ auto SaveConfig(Config& config, const std::string& previous_uid) -> bool {
 }
 
 void DeleteConfig(const std::string& uid) {
-    ini_puts(uid.c_str(), nullptr, nullptr, OWNFOIL_INI_PATH);
+    if (ini_puts(uid.c_str(), nullptr, nullptr, OWNFOIL_INI_PATH))
+        ini_puts(uid.c_str(), nullptr, nullptr, RATINGS_PATH);
 }
 
 void SetFavorite(Config& config, const std::string& app_id, bool enabled) {
@@ -299,6 +313,24 @@ void SetFavorite(Config& config, const std::string& app_id, bool enabled) {
     if (enabled) config.favorites.push_back(app_id);
     const auto key = "favorite_" + app_id;
     ini_puts(config.uid.c_str(), key.c_str(), enabled ? "1" : nullptr, OWNFOIL_INI_PATH);
+}
+
+auto GetGameRating(const std::string& uid, const std::string& game_id) -> std::optional<int> {
+    const auto key = RatingKey(uid, game_id);
+    if (key.empty()) return {};
+    char value[4]{};
+    if (ini_gets(uid.c_str(), key.c_str(), "", value, sizeof(value), RATINGS_PATH) == 1 && value[0] >= '1' && value[0] <= '5')
+        return value[0] - '0';
+    return 0;
+}
+
+auto SetGameRating(const std::string& uid, const std::string& game_id, int stars) -> bool {
+    const auto key = RatingKey(uid, game_id);
+    if (key.empty() || stars < 1 || stars > 5) return false;
+    fs::FsNativeSd disk;
+    if (R_FAILED(disk.CreateDirectoryRecursively("/config/NinMagicShop/"))) return false;
+    const char value[]{static_cast<char>('0' + stars), '\0'};
+    return ini_puts(uid.c_str(), key.c_str(), value, RATINGS_PATH) && R_SUCCEEDED(disk.Commit());
 }
 
 auto FindByUid(Configs& configs, const std::string& uid) -> Config* {

@@ -99,6 +99,7 @@ struct TitleMenu final : MenuBase, std::enable_shared_from_this<TitleMenu> {
     ~TitleMenu();
 
     auto GetShortTitle() const -> const char* override { return "Game"; }
+    void OnFocusGained() override;
     void Update(Controller* controller, TouchInfo* touch) override;
     void Draw(NVGcontext* vg, Theme* theme) override;
 
@@ -213,6 +214,7 @@ private:
 
     void DrawPage(NVGcontext* vg, Theme* theme);
     void DrawColumn(NVGcontext* vg, Theme* theme);
+    void ShowRatingPicker(int current);
 
 private:
     const sphaira::ownfoil::Config m_config;

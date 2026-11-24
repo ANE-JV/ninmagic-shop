@@ -1142,6 +1142,11 @@ auto ParseApps(const std::vector<u8>& data, const std::string& base_url, AppType
                 if (app.platform.empty()) app.platform = index::PlatformMetadata(GetString(src, key));
             }
         }
+        if (type == AppType::Base) {
+            if (const auto platform = index::NeroMagicPlatform(base_url, app.app_id, app.name); !platform.empty()) {
+                app.platform = platform;
+            }
+        }
         if (app.platform.empty()) app.platform = index::PlatformFromTags(app.name);
         const auto db = yyjson_obj_get(item, "titledb");
         const auto db_name = index::Lower(GetString(db, "name"));
@@ -1846,8 +1851,11 @@ static auto FetchScopedNativePage(const std::string& base_url, const Config& con
         auto match = positions.find(id);
         if (match == positions.end()) continue;
         auto& row = rows[match->second];
-        if (row.platform.empty() && !label.empty()) { row.platform = label; row.platform_learned = true; }
-        if (MatchesPlatform(query.platform, row.platform)) out.push_back(std::move(row));
+        // The full catalog already assigned these exact IDs to the selected console.
+        // Additional card metadata may differ and must not hide one of its games.
+        row.platform = label;
+        row.platform_learned = false;
+        out.push_back(std::move(row));
     }
     return true;
 }

@@ -172,10 +172,6 @@ Menu::Menu(u32 flags, std::function<void()> check_update)
 
     m_list = std::make_unique<List>(1, 4, LIST_POS, LIST_ITEM, LIST_PAD);
 
-    if (m_view.Get() < 0 || m_view.Get() >= ViewType_Count) {
-        m_view.Set(ViewType_Icon);
-    }
-
     // a hand-edited ini must not leave the sidebar pointing past the list, nor
     // BuildQuery indexing past SORT_MODES.
     if (m_sort.Get() < 0 || m_sort.Get() >= static_cast<s64>(std::size(SORT_MODES))) {
@@ -186,7 +182,6 @@ Menu::Menu(u32 flags, std::function<void()> check_update)
     const auto saved_page_size = m_page_size.Get();
     const auto page_size = std::lower_bound(std::begin(PAGE_SIZES), std::end(PAGE_SIZES), saved_page_size);
     m_page_size.Set(saved_page_size <= 0 ? 30 : page_size == std::end(PAGE_SIZES) ? PAGE_SIZES[std::size(PAGE_SIZES) - 1] : *page_size);
-    m_view.Set(ViewType_Icon);
     fs::FsNativeSd().GetFreeSpace("/", &m_sd_free);
 }
 
@@ -223,6 +218,7 @@ void Menu::SetMode(Mode mode) {
             m_prev_y = FindAction(Button::Y);
         }
         SetAction(Button::Y, Action{"Cola", [] { InstallQueue::Get().ShowMenu(); }});
+        SetAction(Button::R3, Action{[this] { CycleView(); }});
         SetAction(Button::SELECT, Action{[this]{
             ShowOptions();
         }});
@@ -246,6 +242,7 @@ void Menu::SetMode(Mode mode) {
             RestoreAction(Button::Y, m_prev_y);
             RemoveAction(Button::L2);
             RemoveAction(Button::R2);
+            RemoveAction(Button::R3);
             SetTitle("NinMagic Shop");
             SetTitleSubHeading("");
             SetSubHeading("");
@@ -289,7 +286,7 @@ void Menu::FreeEntries() {
 }
 
 void Menu::CycleView() {
-    m_view.Set((m_view.Get() + 1) % ViewType_Count);
+    m_list_view.Set(!m_list_view.Get());
     OnViewChange();
 }
 
@@ -365,15 +362,30 @@ void Menu::UpdatePreview(bool immediate) {
 }
 
 void Menu::OnViewChange() {
-    m_entry_index = 0;
-    m_banner_name.Reset(); m_banner_publisher.Reset();
-    m_list = std::make_unique<List>(shop::layout::Columns, shop::layout::VisibleCards, GRID_POS, GRID_ITEM, GRID_PAD);
+    const auto first_visible = static_cast<s64>(m_list->GetYoff() / m_list->GetMaxY()) * m_list->GetRow();
+    if (m_list_view.Get()) {
+        m_list = std::make_unique<List>(1, shop::layout::VisibleListRows, GRID_POS,
+            ToVec4(shop::layout::ListCard), Vec2{0.f, shop::layout::ListRowGap});
+    } else {
+        m_list = std::make_unique<List>(shop::layout::Columns, shop::layout::VisibleCards, GRID_POS, GRID_ITEM, GRID_PAD);
+    }
     m_list->SetPageJump(false);
     m_list->SetScrollBarPos(shop::layout::GridScrollX, shop::layout::GridScrollY, shop::layout::GridScrollHeight);
+    ScrollToSelection(first_visible);
+}
+
+void Menu::ScrollToSelection(s64 first_visible) {
+    const auto columns = m_list->GetRow();
+    const auto visible_rows = m_list->GetPage() / columns;
+    const auto total_rows = (static_cast<s64>(m_entries.size()) + columns - 1) / columns;
+    const auto selected_row = m_entry_index / columns;
+    const auto first = std::max<s64>(0, selected_row - visible_rows + 1);
+    const auto last = std::min(selected_row, std::max<s64>(0, total_rows - visible_rows));
+    m_list->SetYoff(std::clamp(first_visible / columns, first, last) * m_list->GetMaxY());
 }
 
 bool Menu::MoveAcrossPage(Controller* controller, TouchInfo* touch) {
-    constexpr s64 columns = shop::layout::Columns;
+    const auto columns = m_list->GetRow();
     const auto count = static_cast<s64>(m_entries.size());
     const auto last_row = (count - 1) / columns;
     bool forward = controller->GotDown(Button::DOWN) && m_entry_index / columns == last_row;
@@ -381,7 +393,7 @@ bool Menu::MoveAcrossPage(Controller* controller, TouchInfo* touch) {
     if (touch->is_end && touch->initial.x >= GRID_POS.x && touch->initial.x < GRID_POS.x + GRID_POS.w
         && touch->initial.y >= GRID_POS.y && touch->initial.y < GRID_POS.y + GRID_POS.h) {
         const auto distance = static_cast<float>(touch->initial.y) - static_cast<float>(touch->cur.y);
-        constexpr s64 visible_rows = shop::layout::VisibleCards / columns;
+        const auto visible_rows = m_list->GetPage() / columns;
         const auto bottom = std::max<s64>(0, last_row + 1 - visible_rows) * m_list->GetMaxY();
         forward = distance >= 48.f && m_list->GetYoff() >= bottom - 1.f;
         backward = distance <= -48.f && m_list->GetYoff() < 1.f;
@@ -424,6 +436,7 @@ void Menu::Update(Controller* controller, TouchInfo* touch) {
             if (m_preview && m_preview->HandleDetailTouch(touch)) { m_detail_focus = true; m_sidebar_focus = false; return; }
             if (touch->in_range(SEARCH_BOX)) { ShowSearch(std::size(CATEGORIES) - 1); return; }
             if (touch->in_range(FOLDERS_BUTTON)) { ShowCategories(); return; }
+            if (touch->in_range(ToVec4(shop::layout::ViewMode))) { CycleView(); return; }
             const auto choices = PlatformChoices();
             for (size_t row = 0; row < shop::layout::VisiblePlatforms && m_sidebar_offset + row < choices.size(); ++row) if (touch->in_range(ToVec4(shop::layout::PlatformRow(row)))) {
                 m_sidebar_index = m_sidebar_offset + row; m_sidebar_focus = true; m_detail_focus = false; ActivateSidebar(); return;
@@ -431,6 +444,10 @@ void Menu::Update(Controller* controller, TouchInfo* touch) {
             if (touch->in_range(ToVec4(shop::layout::Downloads))) { InstallQueue::Get().ShowMenu(); return; }
             if (touch->in_range(ToVec4(shop::layout::Settings))) { ShowOptions(); return; }
             if (m_check_update && touch->in_range(ToVec4(shop::layout::UpdateApp))) { m_check_update(); return; }
+        }
+        if ((touch->is_clicked || touch->is_scroll) && touch->in_range(GRID_POS)) {
+            m_sidebar_focus = false;
+            m_detail_focus = false;
         }
         const auto platform_viewport = shop::layout::PlatformViewport;
         if (touch->is_end && touch->initial.x >= platform_viewport.x && touch->initial.x <= platform_viewport.x + platform_viewport.w
@@ -446,9 +463,15 @@ void Menu::Update(Controller* controller, TouchInfo* touch) {
                 return;
             }
         }
-        if (!m_sidebar_focus && !m_detail_focus && !m_entries.empty()) {
-            if (controller->GotDown(Button::LEFT) && m_entry_index % shop::layout::Columns == 0) { m_sidebar_focus = true; }
-            else if (controller->GotDown(Button::RIGHT) && (m_entry_index % shop::layout::Columns == shop::layout::Columns - 1 || m_entry_index + 1 == static_cast<s64>(m_entries.size())) && m_preview) m_detail_focus = true;
+        if (!m_sidebar_focus && !m_detail_focus) {
+            const auto columns = m_list->GetRow();
+            if (controller->GotDown(Button::LEFT) && (m_entries.empty() || m_entry_index % columns == 0)) {
+                m_sidebar_focus = true;
+            } else if (controller->GotDown(Button::RIGHT) && !m_entries.empty() && m_preview
+                    && (m_entry_index % columns == columns - 1
+                        || m_entry_index + 1 == static_cast<s64>(m_entries.size()))) {
+                m_detail_focus = true;
+            }
         }
     } else UpdateProfileActions();
     MenuBase::Update(controller, touch);
@@ -567,6 +590,7 @@ void Menu::Draw(NVGcontext* vg, Theme* theme) {
 
 void Menu::DrawHome(NVGcontext* vg, Theme* theme) {
     shop::CatalogPanelState state;
+    state.list_view = m_list_view.Get();
     state.can_update = static_cast<bool>(m_check_update);
     state.platforms = PlatformChoices();
     if (m_sidebar_index < state.platforms.size()) {
@@ -1249,9 +1273,7 @@ void Menu::ApplyPage(s64 page, std::vector<sphaira::ownfoil::api::ShopApp>& apps
 
     UpdateCatalogSummary();
     m_entry_index = std::clamp<s64>(focus, 0, std::max<s64>(0, static_cast<s64>(m_entries.size()) - 1));
-    constexpr s64 columns = shop::layout::Columns;
-    constexpr s64 rows = shop::layout::VisibleCards / columns;
-    m_list->SetYoff(std::max<s64>(0, m_entry_index / columns - rows + 1) * m_list->GetMaxY());
+    ScrollToSelection();
     m_banner_name.Reset();
     m_banner_publisher.Reset();
 
@@ -1427,7 +1449,7 @@ void Menu::ShowOptions() {
         }
         options->Add<SidebarEntryArray>("Juegos por página", page_items, [this](s64& index) {
             if (PAGE_SIZES[index] != m_page_size.Get()) { m_page_size.Set(PAGE_SIZES[index]); LoadPage(0); }
-        }, page_index, "Diez carátulas a la vez. Desplázate para ver el resto o cambia de página con ZL / ZR.");
+        }, page_index, "Desplázate para ver más juegos o cambia de página con ZL / ZR.");
         SidebarEntryArray::Items sort_items;
         for (const auto& mode : SORT_MODES) {
             sort_items.emplace_back(i18n::get(mode.name));

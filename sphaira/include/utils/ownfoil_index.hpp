@@ -134,10 +134,23 @@ inline auto Platform(std::string value) -> std::string {
         {"gb", "Game Boy"}, {"game boy", "Game Boy"}, {"gbc", "Game Boy Color"}, {"game boy color", "Game Boy Color"},
         {"gba", "Game Boy Advance"}, {"game boy advance", "Game Boy Advance"},
         {"nds", "Nintendo DS"}, {"nintendo ds", "Nintendo DS"},
-        {"ps1", "PlayStation"}, {"psx", "PlayStation"}, {"playstation", "PlayStation"},
-        {"psp", "PSP"}, {"mega drive", "Mega Drive"}, {"megadrive", "Mega Drive"}, {"genesis", "Mega Drive"},
-        {"master system", "Master System"}, {"game gear", "Game Gear"}, {"dreamcast", "Dreamcast"},
-        {"arcade", "Arcade"}, {"mame", "Arcade"}, {"neo geo", "Neo Geo"}, {"neogeo", "Neo Geo"}}) {
+        {"n3ds", "Nintendo 3DS / 2DS"}, {"3ds", "Nintendo 3DS / 2DS"}, {"nintendo 3ds", "Nintendo 3DS / 2DS"},
+        {"n2ds", "Nintendo 3DS / 2DS"}, {"2ds", "Nintendo 3DS / 2DS"}, {"nintendo 2ds", "Nintendo 3DS / 2DS"},
+        {"nintendo 3ds / 2ds", "Nintendo 3DS / 2DS"},
+        {"ps1", "PlayStation"}, {"psx", "PlayStation"}, {"playstation", "PlayStation"}, {"playstation (psx)", "PlayStation"},
+        {"psp", "PSP"}, {"playstation portable", "PSP"},
+        {"mega drive", "Mega Drive"}, {"megadrive", "Mega Drive"}, {"genesis", "Mega Drive"}, {"sega mega drive", "Mega Drive"},
+        {"master system", "Master System"}, {"sega master system", "Master System"},
+        {"game gear", "Game Gear"}, {"sega game gear", "Game Gear"},
+        {"dreamcast", "Dreamcast"}, {"sega dreamcast", "Dreamcast"},
+        {"mega cd", "Sega CD"}, {"sega cd", "Sega CD"}, {"32x", "Sega 32X"}, {"sega 32x", "Sega 32X"},
+        {"saturn", "Sega Saturn"}, {"sega saturn", "Sega Saturn"},
+        {"colecovision", "ColecoVision"}, {"c64", "Commodore 64"}, {"commodore 64", "Commodore 64"},
+        {"atari 7800", "Atari 7800"}, {"atari jaguar", "Atari Jaguar"},
+        {"pc engine", "PC Engine"}, {"turbografx-16", "PC Engine"},
+        {"arcade", "Arcade"}, {"mame", "Arcade"}, {"fbneo", "Arcade"},
+        {"neo geo", "Neo Geo"}, {"neogeo", "Neo Geo"}, {"neo-geo", "Neo Geo"},
+        {"neo geo pocket", "Neo Geo Pocket"}, {"neogeo pocket color", "Neo Geo Pocket"}, {"neo geo pocket color", "Neo Geo Pocket"}}) {
         if (value == alias) return label;
     }
     return {};

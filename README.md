@@ -1,4 +1,4 @@
-# NinMagic Shop 0.1.8 — beta
+# NinMagic Shop 0.1.9 — beta
 
 Tienda para Nintendo Switch con Atmosphère. Acceso a tu servidor, catálogo con carátulas, búsqueda, favoritos y cola de instalación. Proyecto separado de las demás aplicaciones NinMagic.
 
@@ -6,7 +6,7 @@ Deriva de [Sphaira 1.1.1](https://github.com/NaGaa95/sphaira), cuyo cliente Ownf
 
 ## Instalación
 
-Descarga [NinMagic-Shop-0.1.8.zip](https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/main/releases/0.1.8/NinMagic-Shop-0.1.8.zip) y extráelo en la raíz de la microSD. La aplicación queda en:
+Descarga [NinMagic-Shop-0.1.9.zip](https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/main/releases/0.1.9/NinMagic-Shop-0.1.9.zip) y extráelo en la raíz de la microSD. La aplicación queda en:
 
 ```
 sdmc:/switch/NinMagicShop/NinMagic-Shop.nro
@@ -85,6 +85,15 @@ La descarga se fija a un commit de este repositorio y comprueba tamaño, SHA-256
 - `config/NinMagicShop/`: perfiles, preferencias y estado del actualizador.
 
 Los perfiles guardados contienen las credenciales en la microSD. No compartas esa carpeta como parte de un pack público. Los ZIP publicados contienen la aplicación y sus licencias, sin perfiles personales ni juegos.
+
+## Cambios de 0.1.9
+
+- La biblioteca muestra hasta 20 carátulas a la vez. Toca el botón de vista o pulsa R3 para cambiar a una lista de títulos. El panel de información ocupa menos espacio a la derecha.
+- En la ficha de cada juego, **X · Votar** guarda o cambia tu voto de una a cinco estrellas en la microSD.
+- El control que recibe el foco del mando se distingue por un contorno fluorescente que pulsa suavemente.
+- El catálogo de NeroMagic agrupa sus colecciones retro por consola. Cada grupo incluye todas sus páginas y la búsqueda se limita a la consola seleccionada.
+- Distingue Game Boy de Game Boy Color y Game Boy Advance. Los títulos de Nintendo 3DS y 2DS comparten una entrada. Los títulos de la serie ACA NEOGEO aparecen en Neo Geo y los de Arcade Archives aparecen en Arcade.
+- La cruceta izquierda devuelve el foco a la lista de consolas también desde una página vacía.
 
 ## Cambios de 0.1.8
 

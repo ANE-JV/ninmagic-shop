@@ -2,6 +2,7 @@
 #pragma once
 #include "nanovg.h"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 
 // Shared by the actual Switch screens and the desktop rendering harness.
@@ -59,6 +60,25 @@ inline void Glow(NVGcontext* vg, Rect r, NVGcolor colour, float strength = .28f,
     nvgBeginPath(vg); nvgRect(vg, r.x - 20, r.y - 20, r.w + 40, r.h + 40);
     nvgRoundedRect(vg, r.x + 1, r.y + 1, r.w - 2, r.h - 2, radius);
     nvgPathWinding(vg, NVG_HOLE); nvgFillPaint(vg, paint); nvgFill(vg);
+}
+inline float FocusPulse() {
+    using namespace std::chrono;
+    constexpr int period_ms = 1800;
+    const auto time = duration_cast<milliseconds>(steady_clock::now().time_since_epoch()).count() % period_ms;
+    return .5f - .5f * std::cos(float(time) * (6.2831853f / period_ms));
+}
+
+// The solid keyline stays legible over bright covers and cyan buttons. Only the halo breathes.
+inline void FocusRing(NVGcontext* vg, Rect r, float radius = 8.f) {
+    const auto pulse = FocusPulse();
+    const auto lime = nvgRGB(202, 255, 58);
+    const Rect edge{r.x + 1.f, r.y + 1.f, r.w - 2.f, r.h - 2.f};
+    Glow(vg, r, lime, .27f + .48f * pulse, radius);
+    Outline(vg, edge, nvgRGB(14, 26, 17), 6.f, radius);
+    Outline(vg, edge, lime, 3.f, radius);
+    // The leading marker identifies focus even when its colour is hard to distinguish.
+    const auto marker_h = std::min(18.f, r.h * .44f);
+    Fill(vg, {r.x, r.y + (r.h - marker_h) * .5f, 5.f, marker_h}, lime, 2.f);
 }
 inline void Panel(NVGcontext* vg, Rect r, NVGcolor accent = Border, bool focused = false, float radius = 10.f) {
     if (focused) Glow(vg, r, accent, .4f, radius);

@@ -103,13 +103,13 @@ inline void DrawDetailPanel(NVGcontext* vg, Rect bounds, const DetailPanelState&
     }
     nvgBeginPath(vg); nvgRect(vg, hero.x, hero.y, hero.w, hero.h);
     nvgFillPaint(vg, nvgLinearGradient(vg, hero.x, hero.y, hero.x, hero.y + hero.h,
-        nvgRGBA(3, 12, 24, 165), nvgRGBA(3, 12, 24, 242))); nvgFill(vg);
+        nvgRGBA(3, 12, 24, 179), nvgRGBA(3, 12, 24, 245))); nvgFill(vg);
     const auto area = [&](float y, float height) -> Rect {
         return {bounds.x + 30.f * sx, bounds.y + y * sy, bounds.w - 50.f * sx, height * sy};
     };
     Fill(vg, {bounds.x + 17.f * sx, bounds.y + 21.f * sy, 5.f * sx, 29.f * sy}, Cyan, 0.f);
     DetailText(vg, area(18.f, 60.f), 25.f * scale, White, state.title, 2, true);
-    DetailText(vg, area(82.f, 19.f), 15.f * scale, Muted, state.metadata);
+    DetailText(vg, area(82.f, 19.f), std::max(13.f, 15.f * scale), Muted, state.metadata);
     if (state.genre && *state.genre) {
         DetailText(vg, area(106.f, 20.f), 15.f * scale, Cyan, "Género", 1, true);
         auto genre = area(106.f, 20.f);
@@ -117,7 +117,7 @@ inline void DrawDetailPanel(NVGcontext* vg, Rect bounds, const DetailPanelState&
         genre.w -= 55.f * sx;
         DetailText(vg, genre, 16.f * scale, White, state.genre);
     }
-    DetailText(vg, area(134.f, 79.f), 16.f * scale, White, state.description, 4);
+    DetailText(vg, area(134.f, 79.f), std::max(14.5f, 16.f * scale), White, state.description, 4);
     const Rect contents{bounds.x + 16.f * sx, bounds.y + 226.f * sy, bounds.w - 32.f * sx, 119.f * sy};
     Fill(vg, contents, nvgRGBA(3, 12, 24, 160), 8.f);
     Outline(vg, contents, Border, 1.f, 8.f);
@@ -140,15 +140,17 @@ inline void DrawDetailPanel(NVGcontext* vg, Rect bounds, const DetailPanelState&
             Text(vg, bounds.x + bounds.w - 30.f * sx, bounds.y + (269.f + row * 29.f) * sy,
                 13.f * scale, Muted, state.update_status, NVG_ALIGN_RIGHT | NVG_ALIGN_MIDDLE);
     }
-    DetailText(vg, area(351.f, 17.f), 12.f * scale, Muted, state.note);
-    Button(vg, DetailActionBounds(bounds, 3), state.primary_label, state.focused && state.action == 3, state.primary_enabled,
+    DetailText(vg, area(351.f, 17.f), std::max(12.f, 12.f * scale), Muted, state.note);
+    Button(vg, DetailActionBounds(bounds, 3), state.primary_label, false, state.primary_enabled,
         Icon::Download, true, 22.f * scale);
-    Button(vg, DetailActionBounds(bounds, 4), "Añadir a la cola", state.focused && state.action == 4, false,
+    Button(vg, DetailActionBounds(bounds, 4), "Añadir a la cola", false, false,
         Icon::Plus, true, 20.f * scale);
     Outline(vg, DetailActionBounds(bounds, 4), Cyan, 1.5f);
     if (!state.primary_enabled) Fill(vg, DetailActionBounds(bounds, 3), nvgRGBA(3, 12, 24, 105), 9.f);
     if (!state.queue_enabled) Fill(vg, DetailActionBounds(bounds, 4), nvgRGBA(3, 12, 24, 90), 9.f);
-    Text(vg, bounds.x + bounds.w * .5f, bounds.y + 487.f * sy, 13.f * scale, Muted, state.footer, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
+    if (state.focused && state.action >= 0 && state.action <= 4)
+        FocusRing(vg, DetailActionBounds(bounds, state.action), state.action < 3 ? 5.f : 9.f);
+    Text(vg, bounds.x + bounds.w * .5f, bounds.y + 487.f * sy, std::max(12.f, 13.f * scale), Muted, state.footer, NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE);
     nvgRestore(vg); Outline(vg, bounds, Violet, 1.f, 11.f);
 }
 } // namespace sphaira::ui::shop

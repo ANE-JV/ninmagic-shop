@@ -46,14 +46,6 @@ private:
         Home,
     };
 
-    // all three draw the same fetched data, so cycling costs nothing.
-    enum ViewType {
-        ViewType_Icon,
-        ViewType_Banner,
-        ViewType_Detail,
-        ViewType_Count,
-    };
-
     enum class ImageState { None, Progress, Done, Failed };
 
     struct LazyImage {
@@ -95,6 +87,7 @@ private:
     void SetCatalogTitle();
     void OnViewChange();
     void CycleView();
+    void ScrollToSelection(s64 first_visible = 0);
     // fetches `page` (0-based) in the background, leaving the page on screen up.
     void LoadPage(s64 page, s64 focus = 0);
     void ApplyPage(s64 page, std::vector<sphaira::ownfoil::api::ShopApp>& apps, s64 total, s64 focus = 0);
@@ -226,7 +219,7 @@ private:
     std::vector<std::string> m_folder_names{};
     std::string m_search{}; // not persisted either, and cleared on connect.
 
-    option::OptionLong m_view{INI_SECTION, "view", ViewType_Icon};
+    option::OptionBool m_list_view{INI_SECTION, "list_view", false};
     option::OptionLong m_page_size{INI_SECTION, "page_size", 30};
     option::OptionLong m_sort{INI_SECTION, "sort", 0};
     option::OptionBool m_sort_desc{INI_SECTION, "sort_desc", false};

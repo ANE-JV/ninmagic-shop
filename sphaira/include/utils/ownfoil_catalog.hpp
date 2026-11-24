@@ -9,6 +9,34 @@ struct ConsolidationStatus {
     std::size_t folders{}, mapped_folders{}, ambiguous_folders{}, unresolved_folders{};
 };
 
+// NeroMagic's own collections use these exact forwarder ID series. The
+// prefixes describe this catalog, not the platform of arbitrary Switch IDs.
+inline auto NeroMagicPlatform(std::string_view server, std::string_view id, std::string_view name) -> std::string_view {
+    if (server.ends_with('/')) server.remove_suffix(1);
+    if (server != "https://neromagic.switchip.es" && server != "https://neromagic.switchip.es:443") return {};
+    if (id.size() != 16 || !std::all_of(id.begin(), id.end(), [](char c) { return HexDigit(c) >= 0; })) return {};
+
+    for (const auto& [prefix, platform] : {
+        std::pair{"05100000", "PSP"}, {"05103000", "PSP"}, {"05107000", "PlayStation"},
+        {"05108000", "Nintendo 3DS / 2DS"}, {"05275000", "Nintendo DS"}, {"05572000", "NES"},
+        {"05852000", "Super Nintendo"}, {"05122000", "Nintendo 64"}, {"05158000", "Game Boy Advance"},
+        {"05574000", "Game Boy"}, {"05269000", "Game Boy Color"}, {"05625000", "Mega Drive"},
+        {"05444000", "Master System"}, {"05417000", "Game Gear"}, {"05500000", "Dreamcast"},
+        {"05501000", "Dreamcast"}, {"05502000", "Dreamcast"}, {"05503000", "Dreamcast"},
+        {"05598000", "Neo Geo"}, {"05758000", "Sega CD"}, {"05748000", "Sega 32X"},
+        {"05871000", "Commodore 64"}, {"05872000", "ColecoVision"}, {"05919000", "Atari 7800"},
+        {"05920000", "PC Engine"}, {"05921000", "Atari Jaguar"}}) {
+        if (id.starts_with(prefix)) return platform;
+    }
+
+    const auto title = Lower(std::string{name});
+    if (title.starts_with("aca neogeo ") || title.starts_with("aca neo geo ")) return "Neo Geo";
+    if (title.starts_with("neogeo pocket color selection ") || title.starts_with("neo geo pocket color selection ")) return "Neo Geo Pocket";
+    if (title.starts_with("arcade archives ") || title.starts_with("johnny turbo's arcade:") ||
+        title.starts_with("johnny turbo’s arcade:")) return "Arcade";
+    return {};
+}
+
 // The NinMagic NES set uses its own forwarder IDs. These are not console
 // identifiers outside this collection. Its public catalogue identifies the
 // following three titles by both ID and name, including on private mirrors.

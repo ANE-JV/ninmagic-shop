@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <functional>
+#include <optional>
 
 namespace sphaira::ownfoil {
 
@@ -24,6 +25,9 @@ auto SaveConfig(Config& config, const std::string& previous_uid = {}) -> bool;
 
 void DeleteConfig(const std::string& uid);
 void SetFavorite(Config& config, const std::string& app_id, bool enabled);
+// Empty means no stable profile or game identity. Zero means the game has no vote.
+auto GetGameRating(const std::string& uid, const std::string& game_id) -> std::optional<int>;
+auto SetGameRating(const std::string& uid, const std::string& game_id, int stars) -> bool;
 
 // an empty uid matches nothing, and a placeholder never matches a real uid.
 auto FindByUid(Configs& configs, const std::string& uid) -> Config*;
