@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "app": "NinMagic Shop",
-  "version": "0.1.8",
-  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/e9047e941be156b655f24171c3f8943159c5ddcc/releases/0.1.8/NinMagic-Shop.nro",
-  "bytes": 4697570,
-  "sha256": "2f8d72c7ff0145f6f67fb8747cedde60da6e57462e04ffecd9135d0c34aa3c6a",
-  "notes": "Lee un catálogo directo desde la microSD. Las fichas no consultan la carpeta de cada juego y el menú indica cuándo no hay nada por instalar."
+  "version": "0.1.9",
+  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/d8c9487aa0848fb42bd4f1a3a351083a93d7ec45/releases/0.1.9/NinMagic-Shop.nro",
+  "bytes": 4701666,
+  "sha256": "ef5f271cd20d4464224d715fcda8ab26fdaf2e8d816891ca0451d15fbb601419",
+  "notes": "Consolas retro de NeroMagic, 20 carátulas o lista, votos de 1 a 5 estrellas y foco fluorescente."
 }
