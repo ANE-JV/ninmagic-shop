@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "app": "NinMagic Shop",
-  "version": "0.1.7",
-  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/1fb4f7014791165365ef8cbb2fab4745fef62509/releases/0.1.7/NinMagic-Shop.nro",
-  "bytes": 4685282,
-  "sha256": "5c5bfdedc11e3ca2cbcd39f4e8bbbf18588e8f43b3ee176f1c6255de11558028",
-  "notes": "Muestra la carátula de la biblioteca al abrir la ficha y permite elegir la base y la actualización en cuanto llegan los enlaces."
+  "version": "0.1.8",
+  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/e9047e941be156b655f24171c3f8943159c5ddcc/releases/0.1.8/NinMagic-Shop.nro",
+  "bytes": 4697570,
+  "sha256": "2f8d72c7ff0145f6f67fb8747cedde60da6e57462e04ffecd9135d0c34aa3c6a",
+  "notes": "Lee un catálogo directo desde la microSD. Las fichas no consultan la carpeta de cada juego y el menú indica cuándo no hay nada por instalar."
 }
