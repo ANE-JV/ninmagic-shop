@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "app": "NinMagic Shop",
-  "version": "0.1.10",
-  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/8dd6c20434ae8b12e928d78bc64ca184a0f6ae3b/releases/0.1.10/NinMagic-Shop.nro",
-  "bytes": 4709858,
-  "sha256": "2b28f011a03a3efa75c180bf2f30fd788123fd8e0c748354a472d6f0a35aae99",
-  "notes": "Consolas retro desde el inicio, lista estable al navegar y fila inferior para Descargas, Ajustes y Actualizar app."
+  "version": "0.1.9",
+  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/d8c9487aa0848fb42bd4f1a3a351083a93d7ec45/releases/0.1.9/NinMagic-Shop.nro",
+  "bytes": 4701666,
+  "sha256": "ef5f271cd20d4464224d715fcda8ab26fdaf2e8d816891ca0451d15fbb601419",
+  "notes": "Consolas retro de NeroMagic, 20 carátulas o lista, votos de 1 a 5 estrellas y foco fluorescente."
 }
