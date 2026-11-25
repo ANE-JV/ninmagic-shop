@@ -47,7 +47,7 @@ if (SWITCH2)
     endforeach()
 endif()
 
-set(sphaira_VERSION 0.1.10)
+set(sphaira_VERSION 0.1.13)
 
 project(sphaira
     VERSION ${sphaira_VERSION}
@@ -271,6 +271,10 @@ FetchContent_Declare(stb_nanovg
 FetchContent_Declare(nanovg
     GIT_REPOSITORY https://github.com/ITotalJustice/nanovg-deko3d.git
     GIT_TAG 2acb0f31c06f9c8748085e02fe2d07be8c9d66cd
+    PATCH_COMMAND ${CMAKE_COMMAND}
+        -DGIT_EXECUTABLE=${GIT_EXECUTABLE}
+        -DPATCH=${CMAKE_SOURCE_DIR}/cmake/patches/nanovg-shop-command-memory.patch
+        -P ${CMAKE_SOURCE_DIR}/cmake/apply_patch.cmake
 )
 
 FetchContent_Declare(stb

@@ -48,8 +48,30 @@ static void CheckDirectIndex() {
     assert(files.empty() && error.empty());
 }
 
+static void CheckMessageOfTheDay() {
+    using namespace sphaira::ownfoil::index;
+    std::vector<File> files;
+    std::string error, message;
+    const auto parse = [&](std::string_view listing) {
+        return Parse(listing.data(), listing.size(), files, error, &message);
+    };
+    assert(parse(R"({"files":[],"success":"¡Bienvenido!\nJuegos clásicos 🎮"})"));
+    assert(message == "¡Bienvenido!\nJuegos clásicos 🎮");
+    assert(parse(R"({"files":[],"success":"Nuevo mensaje"})") && message == "Nuevo mensaje");
+    assert(!parse(R"({"error":"Acceso denegado","success":"No mostrar"})") && message.empty());
+    assert(parse(R"({"files":[],"success":"Una\u0000 línea"})") && message == "Una línea");
+    for (const auto listing : {R"({"files":[]})", R"({"files":[],"success":true})", R"({"files":[],"success":" \r\n\t "})"}) {
+        message = "Mensaje anterior";
+        assert(parse(listing) && message.empty());
+    }
+    const auto prefix = std::string(4095, 'a');
+    const auto oversized = "{\"files\":[],\"success\":\"" + prefix + "ó restante\"}";
+    assert(parse(oversized) && message == prefix);
+}
+
 int main(int argc, char** argv) {
     CheckDirectIndex();
+    CheckMessageOfTheDay();
     using namespace sphaira::ownfoil::index;
     std::vector<File> files;
     std::string error;

@@ -1,0 +1,12 @@
+diff --git a/include/nanovg/dk_renderer.hpp b/include/nanovg/dk_renderer.hpp
+--- a/include/nanovg/dk_renderer.hpp
++++ b/include/nanovg/dk_renderer.hpp
+@@ -151,5 +151,7 @@ namespace nvg
+             };
+         private:
+-            static constexpr size_t DynamicCmdSize = 0x20000;
++            // A Shop frame records the catalog, detail and overlays in one slice.
++            // Reserve space for the full catalog without changing its layout.
++            static constexpr size_t DynamicCmdSize = 0x80000;
+             static constexpr size_t FragmentUniformSize = sizeof(DKNVGfragUniforms) + 4 - sizeof(DKNVGfragUniforms) % 4;
+             static constexpr size_t MaxImages = 0x1000;

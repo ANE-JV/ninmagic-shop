@@ -78,6 +78,14 @@ inline auto MetadataText(yyjson_val* field, size_t byte_limit) -> std::string {
     }
     return std::string(data, size);
 }
+inline auto MessageOfTheDay(yyjson_val* field) -> std::string {
+    auto text = MetadataText(field, 4096);
+    std::erase_if(text, [](unsigned char c) {
+        return (c < 32 && c != '\t' && c != '\n' && c != '\r') || c == 127;
+    });
+    if (text.find_first_not_of(" \t\n\r") == std::string::npos) text.clear();
+    return text;
+}
 inline auto Genre(yyjson_val* record) -> std::string {
     for (const auto key : {"genre", "category", "genres"}) {
         const auto value = yyjson_obj_get(record, key);
@@ -373,10 +381,14 @@ inline auto ParseRoot(yyjson_val* root, std::vector<File>& out, std::string& err
     }
     return true;
 }
-inline auto Parse(const char* bytes, size_t size, std::vector<File>& out, std::string& error) -> bool {
+inline auto Parse(const char* bytes, size_t size, std::vector<File>& out, std::string& error, std::string* motd = nullptr) -> bool {
+    if (motd) motd->clear();
     std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)> doc{yyjson_read(bytes, size, YYJSON_READ_NOFLAG), yyjson_doc_free};
     if (!doc) { out.clear(); error = "The server did not return a plain JSON shop index"; return false; }
-    return ParseRoot(yyjson_doc_get_root(doc.get()), out, error);
+    const auto root = yyjson_doc_get_root(doc.get());
+    if (!ParseRoot(root, out, error)) return false;
+    if (motd) *motd = MessageOfTheDay(yyjson_obj_get(root, "success"));
+    return true;
 }
 
 // Artwork is supplemental metadata: it never changes package identity, kind or

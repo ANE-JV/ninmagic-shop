@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ui/widget.hpp"
+#include <string_view>
 
 namespace sphaira::ui {
 
@@ -23,6 +24,23 @@ struct ScrollableText final : Widget {
     float m_y_off{};
     int m_index{};
     float m_bounds[4]{};
+};
+
+class MessageOfDayBox final : public Widget {
+public:
+    explicit MessageOfDayBox(std::string message);
+    MessageOfDayBox(const MessageOfDayBox&) = delete;
+    void Update(Controller* controller, TouchInfo* touch) override;
+    void Draw(NVGcontext* vg, Theme* theme) override;
+
+private:
+    void Scroll(int rows);
+    auto LastTopRow() const -> int;
+
+    const std::string m_message;
+    std::vector<std::string_view> m_lines;
+    int m_scroll_row{};
+    int m_drag_rows{};
 };
 
 } // namespace sphaira::ui

@@ -236,9 +236,7 @@ auto ParseHandshake(const std::vector<u8>& data, ConnectResult& out) -> bool {
     if (const auto v = yyjson_obj_get(root, "protocol_version"); v && yyjson_is_int(v)) {
         out.info.protocol_version = yyjson_get_sint(v);
     }
-    if (const auto v = yyjson_obj_get(root, "motd"); v && yyjson_is_str(v)) {
-        out.info.motd = yyjson_get_str(v);
-    }
+    out.info.motd = index::MessageOfTheDay(yyjson_obj_get(root, "motd"));
     out.info.is_public = GetBool(root, "public");
 
     // a shop that moved says so here, which is the only way a console off its
@@ -526,8 +524,10 @@ auto ReadDirectCatalog(const std::string& url, const Config& config, std::stop_t
 
 auto FetchIndex(const std::string& url, const Config& config, std::stop_token token,
     std::shared_ptr<const std::vector<index::File>>& files, std::string& error, bool refresh = false, bool* legacy_result = nullptr,
-    const ConnectionDiagnostic* diagnostic = nullptr, IndexScope scope = IndexScope::Catalog, bool* header_result = nullptr, bool* refused_result = nullptr) -> bool {
+    const ConnectionDiagnostic* diagnostic = nullptr, IndexScope scope = IndexScope::Catalog, bool* header_result = nullptr,
+    bool* refused_result = nullptr, std::string* motd = nullptr) -> bool {
     if (refused_result) *refused_result = false;
+    if (motd) motd->clear();
     if (!refresh) {
         std::scoped_lock lock(g_index_mutex);
         const auto detail = g_detail_index_cache.find(url);
@@ -581,7 +581,7 @@ auto FetchIndex(const std::string& url, const Config& config, std::stop_token to
         }
         const auto bytes = reinterpret_cast<const char*>(result.data.data());
         if (!strict && !config.legacy_html && config.backend != Backend::LegacyHtml
-                && index::Parse(bytes, result.data.size(), *parsed, error)) return true;
+                && index::Parse(bytes, result.data.size(), *parsed, error, motd)) return true;
         if (config.backend == Backend::JsonIndex) return false;
         // A normal browser or login page can contain links ending in '/'.
         // Only the dedicated client directory template is eligible here.
@@ -885,8 +885,10 @@ auto TryConnect(const std::string& url, const Config& config, std::stop_token to
         }
     }
     std::shared_ptr<const std::vector<index::File>> files;
+    std::string motd;
     out.error.clear();
-    if (!FetchIndex(url, config, token, files, out.error, true, &out.legacy_html, &diagnostic, IndexScope::Catalog, &out.legacy_headers, &out.refused)) {
+    if (!FetchIndex(url, config, token, files, out.error, true, &out.legacy_html, &diagnostic, IndexScope::Catalog,
+            &out.legacy_headers, &out.refused, &motd)) {
         out.reached = out.reached || out.refused;
         return false;
     }
@@ -895,6 +897,7 @@ auto TryConnect(const std::string& url, const Config& config, std::stop_token to
     out.base_url = out.legacy_html && !url.ends_with('/') ? url + '/' : url;
     out.info = {};
     out.info.name = config.name;
+    out.info.motd = std::move(motd);
     out.info.features.shop = true;
     return true;
 }

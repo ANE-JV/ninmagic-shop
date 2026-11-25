@@ -1,8 +1,10 @@
 #include "ui/scrollable_text.hpp"
 #include "app.hpp"
 #include "ui/nvg_util.hpp"
+#include "ui/shop_message_panel.hpp"
 #include "log.hpp"
 #include <cstring>
+#include <utility>
 
 namespace sphaira::ui {
 
@@ -96,6 +98,58 @@ void ScrollableText::Draw(NVGcontext* vg, Theme* theme) {
     nvgTextLineHeight(App::GetVg(), 1.7);
     gfx::drawTextBox(vg, banner_vec.x + 40, m_y_off, m_font_size, m_bounds[2] - m_bounds[0], theme->GetColour(ThemeEntryID_TEXT), m_text.c_str());
     nvgRestore(vg);
+}
+
+MessageOfDayBox::MessageOfDayBox(std::string message) : m_message{std::move(message)} {
+    SetActions(
+        std::make_pair(Button::A, Action{[this] { SetPop(); }}),
+        std::make_pair(Button::B, Action{[this] { SetPop(); }}),
+        std::make_pair(Button::UP, Action{[this] { Scroll(-1); }}),
+        std::make_pair(Button::DOWN, Action{[this] { Scroll(1); }})
+    );
+}
+
+auto MessageOfDayBox::LastTopRow() const -> int {
+    return std::max(0, static_cast<int>(m_lines.size()) - shop::message::VisibleLines);
+}
+
+void MessageOfDayBox::Scroll(int rows) {
+    m_scroll_row = std::clamp(m_scroll_row + rows, 0, LastTopRow());
+}
+
+void MessageOfDayBox::Update(Controller* controller, TouchInfo* touch) {
+    Widget::Update(controller, touch);
+
+    if (touch->is_clicked) {
+        constexpr auto cancel = shop::message::CancelButton;
+        constexpr auto ok = shop::message::OkButton;
+        if (touch->in_range(Vec4{cancel.x, cancel.y, cancel.w, cancel.h})) {
+            FireAction(Button::B);
+            return;
+        }
+        if (touch->in_range(Vec4{ok.x, ok.y, ok.w, ok.h})) {
+            FireAction(Button::A);
+            return;
+        }
+    }
+
+    const auto& body = shop::message::Body;
+    if (touch->is_scroll && touch->initial.x >= body.x && touch->initial.x <= body.x + body.w &&
+        touch->initial.y >= body.y && touch->initial.y <= body.y + body.h) {
+        m_drag_rows = static_cast<int>((static_cast<float>(touch->initial.y) - touch->cur.y) / shop::message::LineHeight);
+    } else if (touch->is_end) {
+        Scroll(m_drag_rows);
+        m_drag_rows = 0;
+    }
+}
+
+void MessageOfDayBox::Draw(NVGcontext* vg, Theme*) {
+    if (m_lines.empty()) {
+        m_lines = shop::message::Wrap(vg, m_message);
+    }
+
+    const int top = std::clamp(m_scroll_row + m_drag_rows, 0, LastTopRow());
+    shop::message::Draw(vg, m_lines, top);
 }
 
 } // namespace sphaira::ui

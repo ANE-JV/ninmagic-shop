@@ -4,6 +4,7 @@
 #include "ui/sidebar.hpp"
 #include "ui/option_box.hpp"
 #include "ui/progress_box.hpp"
+#include "ui/scrollable_text.hpp"
 #include "ui/install_queue.hpp"
 #include "ui/shop_style.hpp"
 #include "ui/shop_catalog_panel.hpp"
@@ -1102,14 +1103,6 @@ void Menu::ConnectTo(const sphaira::ownfoil::Config& config) {
                 }
 
                 const auto& info = connect_result.info;
-                if (!info.motd.empty()) {
-                    App::Notify(info.name + ": " + info.motd);
-                }
-                if (!connected_config.direct_catalog.empty()) {
-                    App::Notify(info.name + ": catálogo de la microSD");
-                } else {
-                    App::Notify(info.name + (connect_result.used_remote ? ": connected via remote address"_i18n : ": connected via local network"_i18n));
-                }
 
                 // the entry on disk moved under the list, so pick the change up.
                 if (saved_changed) {
@@ -1139,6 +1132,13 @@ void Menu::ConnectTo(const sphaira::ownfoil::Config& config) {
                 m_sidebar_offset = 0;
                 SetMode(Mode::Home);
                 ApplyPage(0, fetched, total);
+                if (!info.motd.empty()) {
+                    App::Push<MessageOfDayBox>(info.motd);
+                } else if (!connected_config.direct_catalog.empty()) {
+                    App::Notify(info.name + ": catálogo de la microSD");
+                } else {
+                    App::Notify(info.name + (connect_result.used_remote ? ": connected via remote address"_i18n : ": connected via local network"_i18n));
+                }
             },
             token
         }, false);
