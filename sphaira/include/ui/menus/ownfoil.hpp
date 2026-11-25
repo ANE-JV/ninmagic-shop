@@ -118,6 +118,8 @@ private:
     void SelectPlatform(const std::string& platform);
     void ShowServerFolders();
     void ActivateSidebar();
+    void FocusToolbar(size_t index = 0);
+    void ActivateToolbar();
     void UpdatePreview(bool immediate = false);
     void RetirePreview();
     auto FindAction(Button button) const -> std::optional<Action>;
@@ -209,6 +211,7 @@ private:
     bool m_sidebar_focus{}, m_detail_focus{};
     size_t m_sidebar_index{};
     size_t m_sidebar_offset{};
+    std::optional<size_t> m_toolbar_index{};
     s64 m_sd_free{-1};
     // an index into CATEGORIES, deliberately not persisted unlike the options
     // beside it: a shop opens on New games every time it is connected to.

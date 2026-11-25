@@ -116,6 +116,7 @@ struct TitleMenu final : MenuBase, std::enable_shared_from_this<TitleMenu> {
     void DrawDetailPanel(NVGcontext* vg, Theme* theme, const Vec4& bounds, int fallback_artwork = 0);
     auto HandleDetailTouch(const TouchInfo* touch) -> bool;
     auto HandleDetailController(Controller* controller) -> bool;
+    auto IsLastDetailAction() const -> bool { return m_detail_action == 4; }
     void SetDetailFocused(bool focused) { m_detail_focused = focused; }
     void OpenInstallOptions();
     void QueueSelectedPackage();

@@ -124,6 +124,7 @@ Menu::Menu(u32 flags, std::function<void()> check_update)
         }
         if (m_mode == Mode::Home && m_detail_focus) { m_detail_focus = false; return; }
         if (m_mode == Mode::Home && m_sidebar_focus) { m_sidebar_focus = false; return; }
+        if (m_mode == Mode::Home && m_toolbar_index) { m_toolbar_index.reset(); return; }
         if (m_mode == Mode::Home && !m_directory_stack.empty()) {
             GoUp();
             return;
@@ -143,6 +144,7 @@ Menu::Menu(u32 flags, std::function<void()> check_update)
     SetAction(Button::A, Action{"Select"_i18n, [this]{
         if (m_mode == Mode::Home) {
             if (m_sidebar_focus) { ActivateSidebar(); return; }
+            if (m_toolbar_index) { ActivateToolbar(); return; }
             if (m_detail_focus && m_preview) { Controller press{}; press.Set(Button::A, true); m_detail_focus = m_preview->HandleDetailController(&press); return; }
             OpenSelected();
             return;
@@ -197,6 +199,7 @@ Menu::~Menu() {
 
 void Menu::SetMode(Mode mode) {
     const auto was_home = m_mode == Mode::Home;
+    if (mode != m_mode) m_toolbar_index.reset();
     m_mode = mode;
     SetShopConnection(mode == Mode::Home, m_connecting);
     SetAction(Button::X, Action{mode == Mode::Home ? "Buscar" : "Añadir tienda", [this] {
@@ -292,13 +295,16 @@ void Menu::CycleView() {
 
 void Menu::UpdateCatalogSummary() {
     const auto available = sphaira::ownfoil::api::CachedPlatforms(m_base_url, m_config);
-    std::vector<std::string> choices{"Nintendo Switch"};
-    for (const auto& label : available) if (!label.empty() && std::find(choices.begin(), choices.end(), label) == choices.end()) choices.push_back(label);
+    // Keep discoveries for the connected shop. A filtered page or folder
+    // may supply more evidence, but it cannot remove another console.
+    const auto add_platform = [this](const std::string& label) {
+        if (!label.empty() && std::find(m_platform_choices.begin(), m_platform_choices.end(), label) == m_platform_choices.end())
+            m_platform_choices.push_back(label);
+    };
+    for (const auto& label : available) add_platform(label);
     for (const auto& entry : m_entries) {
-        const auto& label = entry.app.platform;
-        if (!entry.app.directory && !label.empty() && std::find(choices.begin(), choices.end(), label) == choices.end()) choices.push_back(label);
+        if (!entry.app.directory) add_platform(entry.app.platform);
     }
-    m_platform_choices = std::move(choices);
     m_catalog_status = sphaira::ownfoil::api::CachedCatalogStatus(m_base_url, m_config);
 }
 void Menu::SelectPlatform(const std::string& platform) {
@@ -313,6 +319,7 @@ void Menu::SelectPlatform(const std::string& platform) {
     if (!m_directory_stack.empty()) m_base_url = m_directory_stack.front();
     m_directory_stack.clear(); m_folder_names.clear();
     m_sidebar_focus = false; m_detail_focus = false;
+    m_toolbar_index.reset();
     FreeEntries(); m_pending_page.reset(); LoadPage(0);
 }
 void Menu::ShowServerFolders() {
@@ -321,6 +328,7 @@ void Menu::ShowServerFolders() {
     m_directory_stack.clear(); m_folder_names.clear();
     m_platform.clear(); m_search.clear(); m_category = 0;
     m_consolidated = false; m_sidebar_focus = false; m_detail_focus = false;
+    m_toolbar_index.reset();
     FreeEntries(); m_pending_page.reset(); LoadPage(0);
 }
 void Menu::CyclePlatform(int direction) {
@@ -334,11 +342,19 @@ void Menu::CyclePlatform(int direction) {
     SelectPlatform(choices[m_sidebar_index]);
 }
 void Menu::ActivateSidebar() {
-    const auto choices = PlatformChoices();
-    if (m_sidebar_index < choices.size()) {
-        SelectPlatform(choices[m_sidebar_index]);
-    } else if (m_sidebar_index == choices.size()) InstallQueue::Get().ShowMenu();
-    else if (m_sidebar_index == choices.size() + 1) ShowOptions();
+    const auto& choices = PlatformChoices();
+    if (m_sidebar_index < choices.size()) SelectPlatform(choices[m_sidebar_index]);
+}
+
+void Menu::FocusToolbar(size_t index) {
+    m_sidebar_focus = false;
+    m_detail_focus = false;
+    m_toolbar_index = index;
+}
+
+void Menu::ActivateToolbar() {
+    if (*m_toolbar_index == 0) InstallQueue::Get().ShowMenu();
+    else if (*m_toolbar_index == 1) ShowOptions();
     else if (m_check_update) m_check_update();
 }
 void Menu::RetirePreview() {
@@ -404,7 +420,13 @@ bool Menu::MoveAcrossPage(Controller* controller, TouchInfo* touch) {
     }
     if (!forward && !backward) return false;
     const auto target = shop::AdjacentPage(m_page, GetPageMax(), m_page_size.Get(), columns, m_entry_index, forward, backward);
-    if (!target) return false;
+    if (!target) {
+        if (forward && !backward && controller->GotDown(Button::DOWN)) {
+            FocusToolbar();
+            return true;
+        }
+        return false;
+    }
     if (!m_loading && !m_pending_page) LoadPage(target->page, target->focus);
     return true;
 }
@@ -426,28 +448,35 @@ void Menu::Update(Controller* controller, TouchInfo* touch) {
         if (category != sphaira::ownfoil::api::Category::All && category != sphaira::ownfoil::api::Category::Search) LoadPage(m_page);
     }
     if (m_mode == Mode::Home) {
-        const std::string primary_hint = m_sidebar_focus || m_detail_focus ? "Seleccionar" : "Ver juego";
+        const std::string primary_hint = m_sidebar_focus || m_detail_focus || m_toolbar_index ? "Seleccionar" : "Ver juego";
         if (m_actions.at(Button::A).m_hint != primary_hint) { auto action = m_actions.at(Button::A); action.m_hint = primary_hint; SetAction(Button::A, action); }
         // The shell owns + and the header. Search/queue stay directly available
         // while sidebar and detail navigation handle only their own controls.
         if (!HasAction(Button::Y) || m_actions.at(Button::Y).m_hint != "Cola")
             SetAction(Button::Y, Action{"Cola", [] { InstallQueue::Get().ShowMenu(); }});
         if (touch->is_clicked) {
-            if (m_preview && m_preview->HandleDetailTouch(touch)) { m_detail_focus = true; m_sidebar_focus = false; return; }
+            if (m_preview && m_preview->HandleDetailTouch(touch)) {
+                m_detail_focus = true; m_sidebar_focus = false; m_toolbar_index.reset(); return;
+            }
             if (touch->in_range(SEARCH_BOX)) { ShowSearch(std::size(CATEGORIES) - 1); return; }
             if (touch->in_range(FOLDERS_BUTTON)) { ShowCategories(); return; }
             if (touch->in_range(ToVec4(shop::layout::ViewMode))) { CycleView(); return; }
-            const auto choices = PlatformChoices();
+            const auto& choices = PlatformChoices();
             for (size_t row = 0; row < shop::layout::VisiblePlatforms && m_sidebar_offset + row < choices.size(); ++row) if (touch->in_range(ToVec4(shop::layout::PlatformRow(row)))) {
                 m_sidebar_index = m_sidebar_offset + row; m_sidebar_focus = true; m_detail_focus = false; ActivateSidebar(); return;
             }
-            if (touch->in_range(ToVec4(shop::layout::Downloads))) { InstallQueue::Get().ShowMenu(); return; }
-            if (touch->in_range(ToVec4(shop::layout::Settings))) { ShowOptions(); return; }
-            if (m_check_update && touch->in_range(ToVec4(shop::layout::UpdateApp))) { m_check_update(); return; }
+            const std::array toolbar{shop::layout::Downloads, shop::layout::Settings, shop::layout::UpdateApp};
+            for (size_t index = 0; index < (m_check_update ? toolbar.size() : toolbar.size() - 1); ++index) {
+                if (!touch->in_range(ToVec4(toolbar[index]))) continue;
+                FocusToolbar(index);
+                ActivateToolbar();
+                return;
+            }
         }
         if ((touch->is_clicked || touch->is_scroll) && touch->in_range(GRID_POS)) {
             m_sidebar_focus = false;
             m_detail_focus = false;
+            m_toolbar_index.reset();
         }
         const auto platform_viewport = shop::layout::PlatformViewport;
         if (touch->is_end && touch->initial.x >= platform_viewport.x && touch->initial.x <= platform_viewport.x + platform_viewport.w
@@ -460,10 +489,11 @@ void Menu::Update(Controller* controller, TouchInfo* touch) {
                 m_sidebar_offset = static_cast<size_t>(std::clamp(static_cast<s64>(m_sidebar_offset) + (step ? step : delta > 0 ? 1 : -1), s64{0}, last));
                 m_sidebar_index = m_sidebar_offset;
                 m_sidebar_focus = true; m_detail_focus = false;
+                m_toolbar_index.reset();
                 return;
             }
         }
-        if (!m_sidebar_focus && !m_detail_focus) {
+        if (!m_sidebar_focus && !m_detail_focus && !m_toolbar_index) {
             const auto columns = m_list->GetRow();
             if (controller->GotDown(Button::LEFT) && (m_entries.empty() || m_entry_index % columns == 0)) {
                 m_sidebar_focus = true;
@@ -477,14 +507,28 @@ void Menu::Update(Controller* controller, TouchInfo* touch) {
     MenuBase::Update(controller, touch);
     if (m_mode == Mode::Home) {
         if (m_sidebar_focus) {
-            const auto count = PlatformChoices().size() + (m_check_update ? 3 : 2);
-            if (controller->GotDown(Button::UP)) m_sidebar_index = (m_sidebar_index + count - 1) % count;
-            if (controller->GotDown(Button::DOWN)) m_sidebar_index = (m_sidebar_index + 1) % count;
+            const auto count = PlatformChoices().size();
+            if (controller->GotDown(Button::UP) && m_sidebar_index > 0) --m_sidebar_index;
+            if (controller->GotDown(Button::DOWN)) {
+                if (m_sidebar_index + 1 < count) ++m_sidebar_index;
+                else FocusToolbar();
+            }
             if (controller->GotDown(Button::RIGHT)) m_sidebar_focus = false;
+        } else if (m_toolbar_index) {
+            const size_t last = m_check_update ? 2 : 1;
+            if (controller->GotDown(Button::LEFT) && *m_toolbar_index > 0) --*m_toolbar_index;
+            if (controller->GotDown(Button::RIGHT) && *m_toolbar_index < last) ++*m_toolbar_index;
+            if (controller->GotDown(Button::UP)) m_toolbar_index.reset();
         } else if (m_detail_focus && m_preview) {
-            Controller navigation = *controller;
-            navigation.Set(Button::A, false); navigation.Set(Button::B, false);
-            m_detail_focus = m_preview->HandleDetailController(&navigation);
+            if (controller->GotDown(Button::DOWN) && m_preview->IsLastDetailAction()) {
+                FocusToolbar();
+            } else {
+                Controller navigation = *controller;
+                navigation.Set(Button::A, false); navigation.Set(Button::B, false);
+                m_detail_focus = m_preview->HandleDetailController(&navigation);
+            }
+        } else if (m_entries.empty() && controller->GotDown(Button::DOWN)) {
+            FocusToolbar();
         } else if (!m_entries.empty() && !MoveAcrossPage(controller, touch)) {
             m_list->OnUpdate(controller, touch, m_entry_index, m_entries.size(), [this](bool tapped, s64 index) {
                 if (tapped && m_entry_index == index) OpenSelected();
@@ -600,6 +644,8 @@ void Menu::DrawHome(NVGcontext* vg, Theme* theme) {
     m_sidebar_offset = std::min(m_sidebar_offset, state.platforms.size() > shop::layout::VisiblePlatforms ? state.platforms.size() - shop::layout::VisiblePlatforms : 0);
     state.sidebar_offset = m_sidebar_offset; state.sidebar_index = m_sidebar_index;
     state.sidebar_focused = m_sidebar_focus; state.detail_focused = m_detail_focus;
+    state.toolbar_focused = m_toolbar_index.has_value();
+    state.toolbar_index = m_toolbar_index.value_or(0);
     state.platform = m_platform;
     state.heading = !m_consolidated ? "Carpetas del servidor" : m_platform.empty() ? "Biblioteca" : m_platform == "__unknown__" ? "Sin clasificar" : m_platform;
     state.location = "Biblioteca";
@@ -743,6 +789,7 @@ void Menu::SelectCategory(sphaira::ownfoil::api::Category category, bool prompt_
     if (category == sphaira::ownfoil::api::Category::Search && prompt_search) { ShowSearch(index); return; }
     m_category = index;
     if (m_connecting || m_base_url.empty()) return;
+    m_toolbar_index.reset();
     FreeEntries();
     m_pending_page.reset();
     SetMode(Mode::Home);
@@ -762,6 +809,7 @@ void Menu::EnterDirectory(const sphaira::ownfoil::api::ShopApp& app) {
     m_platform.clear();
     m_folder_names.push_back(app.name);
     m_base_url = app.download.url;
+    m_toolbar_index.reset();
     FreeEntries();
     m_pending_page.reset();
     LoadPage(0);
@@ -781,6 +829,7 @@ void Menu::GoUp() {
     m_base_url = m_directory_stack.back();
     m_directory_stack.pop_back();
     if (!m_folder_names.empty()) m_folder_names.pop_back();
+    m_toolbar_index.reset();
     FreeEntries();
     m_pending_page.reset();
     LoadPage(0);
@@ -1085,6 +1134,9 @@ void Menu::ConnectTo(const sphaira::ownfoil::Config& config) {
                 m_base_url = base_url;
                 m_directory_stack.clear();
                 m_folder_names.clear();
+                m_platform_choices = {"Nintendo Switch"};
+                m_sidebar_index = 0;
+                m_sidebar_offset = 0;
                 SetMode(Mode::Home);
                 ApplyPage(0, fetched, total);
             },
@@ -1382,6 +1434,7 @@ void Menu::ShowSearch(s64 index) {
     m_search = term;
     m_category = index;
     m_sidebar_focus = m_detail_focus = false;
+    m_toolbar_index.reset();
     if (!m_base_url.empty() && !m_connecting) {
         FreeEntries();
         m_pending_page.reset();

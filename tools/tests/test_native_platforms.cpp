@@ -157,4 +157,31 @@ int main() {
     query.search = "Sample";
     query.platform = "Game Boy Advance";
     assert(fetch_nero() && total == 1003 && rows.size() == 10 && rows.front().platform == "Game Boy Advance");
+
+    catalog = {{"0100C34019218000", "Nintendo Switch", "Arcade Archives BARADUKE", true},
+        {"0585200000010000", "", "3x3 Eyes - Juuma Houkan"},
+        {"0585200000030000", "", "7th Saga Redux, The"},
+        {"0585200000050000", "", "A game in the same Super Nintendo collection"},
+        {"0559800000010000", "", "2020 Super Baseball"},
+        {"0559800000030000", "", "3 Count Bout"},
+        {"0515800000010000", "", "007 - Everything or Nothing"},
+        {"0515800000030000", "", "Unrelated game with a reused forwarder ID"}};
+    search_hits = {catalog[3]};
+    config.user = "mirror";
+    query.category = Category::All;
+    query.search.clear();
+    query.platform = "Nintendo Switch";
+    assert(fetch() && rows.empty() && requests.size() == 1);
+    const auto library = g_native_library.groups;
+    assert(library->ids.at("Super Nintendo").size() == 3 && library->ids.at("Neo Geo").size() == 2);
+    assert(library->ids.at("Arcade").size() == 1 && library->ids.at("").size() == 2);
+    assert(!library->ids.contains("Game Boy Advance"));
+    query.platform = "Neo Geo";
+    assert(fetch() && total == 2 && rows.size() == 2 && requests.size() == 1);
+    assert(g_native_library.groups == library && library->ids.contains("Super Nintendo"));
+    query.category = Category::Search;
+    query.search = "game in the same";
+    query.platform = "Super Nintendo";
+    assert(fetch() && total == 1 && rows.size() == 1 && rows.front().app_id == catalog[3].app_id);
+    assert(g_native_library.groups == library && library->ids.contains("Arcade"));
 }

@@ -45,7 +45,8 @@ def main():
     menu = (ROOT / "sphaira/source/ui/menus/ownfoil.cpp").read_text(encoding="utf-8")
     start = menu.index("auto Menu::SearchScope(")
     end = menu.index("\nvoid Menu::", menu.index("void Menu::ShowSearch(", start) + 1)
-    (args.output / "production_show_search.inc").write_text(menu[start:end], encoding="utf-8")
+    platforms = menu[menu.index("void Menu::UpdateCatalogSummary("):menu.index("void Menu::SelectPlatform(")]
+    (args.output / "production_show_search.inc").write_text(menu[start:end] + "\n" + platforms, encoding="utf-8")
     search_exe = args.output / ("test_shop_search.exe" if sys.platform == "win32" else "test_shop_search")
     subprocess.run([args.cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-O1",
         "-I", compiler_path(args.cxx, args.output), compiler_path(args.cxx, ROOT / "tools/tests/test_shop_search.cpp"),

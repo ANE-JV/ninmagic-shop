@@ -1505,6 +1505,7 @@ struct PublicArtworkCacheEntry {
 struct NativePlatformGroups {
     std::unordered_map<std::string, std::vector<std::string>> ids;
     bool confirmed_nes_collection{};
+    index::ConfirmedRetroSeries verified_retro_series{};
 };
 struct NativeSearchCache {
     std::string url, user, pass, provider;
@@ -1788,11 +1789,14 @@ static auto FetchScopedNativePage(const std::string& base_url, const Config& con
     auto& cache = library ? g_native_library : g_native_search;
     std::shared_ptr<const NativePlatformGroups> groups;
     bool collection{};
+    index::ConfirmedRetroSeries verified_retro_series{};
     {
         std::scoped_lock lock(g_native_search_mutex);
         if (cache.Account(base_url, config) && cache.query.SameSelection(selection)) groups = cache.groups;
-        if (g_native_library.Account(base_url, config) && g_native_library.groups)
+        if (g_native_library.Account(base_url, config) && g_native_library.groups) {
             collection = g_native_library.groups->confirmed_nes_collection;
+            if (!library) verified_retro_series = g_native_library.groups->verified_retro_series;
+        }
     }
     if (!groups) {
         struct Record {
@@ -1814,15 +1818,18 @@ static auto FetchScopedNativePage(const std::string& base_url, const Config& con
             consumed += static_cast<s64>(rows.size());
             for (auto& app : rows) {
                 if (app.app_id.empty()) continue;
-                // Only this collection needs a name for its identity check.
-                auto name = app.app_id.starts_with("05572000") ? std::move(app.name) : std::string{};
-                records.push_back({std::move(app.app_id), std::move(name), std::move(app.platform)});
+                const bool needs_name = index::FindRetroSeries(app.app_id) || !index::BrandedRetroPlatform(app.name).empty();
+                auto name = needs_name ? std::move(app.name) : std::string{};
+                records.push_back({std::move(app.app_id), std::move(name), std::move(app.platform), app.platform_learned});
             }
             if (consumed >= reported || rows.empty()) break;
         }
         auto found = std::make_shared<NativePlatformGroups>();
+        const auto eligible = [](const Record&) { return true; };
+        found->verified_retro_series = index::ApplyVerifiedRetroSeries(records, config.artwork_search_url,
+            eligible, verified_retro_series);
         found->confirmed_nes_collection = index::ApplyNinMagicCollection(records, config.artwork_search_url,
-            [](const Record&) { return true; }, collection);
+            eligible, collection);
         for (auto& game : records) found->ids[game.platform].push_back(std::move(game.id));
         if (token.stop_requested()) return false;
         groups = std::move(found);

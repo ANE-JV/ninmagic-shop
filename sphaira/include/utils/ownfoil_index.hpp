@@ -118,6 +118,16 @@ inline auto Lower(std::string text) -> std::string {
     std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return std::tolower(c); });
     return text;
 }
+
+inline auto BrandedRetroPlatform(std::string_view name) -> std::string_view {
+    const auto title = Lower(std::string{name});
+    if (title.starts_with("aca neogeo ") || title.starts_with("aca neo geo ")) return "Neo Geo";
+    if (title.starts_with("neogeo pocket color selection ") || title.starts_with("neo geo pocket color selection ")) return "Neo Geo Pocket";
+    if (title.starts_with("arcade archives ") || title.starts_with("johnny turbo's arcade:")
+        || title.starts_with("johnny turbo's arcade ") || title.starts_with("johnny turbo’s arcade:")
+        || title.starts_with("johnny turbo’s arcade ")) return "Arcade";
+    return {};
+}
 // Only a dedicated metadata value or a complete directory component identifies
 // a platform. NSP/NSZ/XCI is a package format, never a platform classification.
 inline auto Platform(std::string value) -> std::string {
@@ -349,6 +359,7 @@ inline auto ParseRoot(yyjson_val* root, std::vector<File>& out, std::string& err
         }
         if (file.platform.empty()) file.platform = PlatformFromPath(file.url);
         if (file.platform.empty()) file.platform = PlatformFromTags(filename);
+        if (file.platform.empty()) file.platform = BrandedRetroPlatform(file.name);
         for (const auto source : {item, metadata}) {
             if (file.genre.empty()) file.genre = Genre(source);
             if (file.description.empty()) file.description = Description(source);
@@ -446,6 +457,7 @@ inline auto ParseArtwork(const char* bytes, size_t size, std::vector<Artwork>& o
         if (art.platform.empty()) art.platform = PlatformFromTags(art.name);
         if (art.platform.empty()) art.platform = PlatformFromTags(art.filename);
         if (art.platform.empty()) art.platform = PlatformFromPath(art.filename);
+        if (art.platform.empty()) art.platform = BrandedRetroPlatform(art.name);
         // Classic Ownfoil also lists custom forwarders as BASE with 01 IDs.
         // A missing TitleDB row and a placeholder are not platform evidence.
         const auto database_id = String(record, "id");
@@ -605,6 +617,7 @@ inline auto ParseHtml(const char* bytes, size_t size, std::vector<File>& out, st
             folder.name = folder.name.substr(folder.name.find_last_of('/') + 1);
             folder.directory = true;
             folder.platform = Platform(folder.name);
+            if (folder.platform.empty()) folder.platform = BrandedRetroPlatform(folder.name);
             folders.push_back(std::move(folder));
         } else {
             if (json.back() != '[') json += ',';

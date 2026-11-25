@@ -17,8 +17,8 @@ struct CatalogPanelState {
     std::vector<CatalogCard> cards;
     std::string platform, heading, location, search, storage, page, empty_text;
     std::string search_hint{"Buscar juegos..."};
-    size_t sidebar_index{}, sidebar_offset{};
-    bool sidebar_focused{}, detail_focused{}, loading{}, can_update{true}, list_view{};
+    size_t sidebar_index{}, sidebar_offset{}, toolbar_index{};
+    bool sidebar_focused{}, detail_focused{}, toolbar_focused{}, loading{}, can_update{true}, list_view{};
 };
 
 inline void CatalogLabel(NVGcontext* vg, Rect bounds, const std::string& title, float size,
@@ -83,16 +83,25 @@ inline void DrawCatalogPanel(NVGcontext* vg, const CatalogPanelState& state) {
         sidebar_button(layout::PlatformRow(row),index,label=="__unknown__"?"Sin clasificar":label.c_str(),
             state.platform==label,Icon::Folder,false,16);
     }
-    if(offset)Text(vg,214,159,13,Cyan,"↑",NVG_ALIGN_RIGHT|NVG_ALIGN_MIDDLE);
-    if(offset+visible<count)Text(vg,214,430,13,Cyan,"↓",NVG_ALIGN_RIGHT|NVG_ALIGN_MIDDLE);
-    Line(vg,38,437,214,437,Alpha(Cyan,.55f));
-    sidebar_button(layout::Downloads,count,"Descargas",false,Icon::Download,true,18);
-    sidebar_button(layout::Settings,count+1,"Ajustes",false,Icon::Settings,true,18);
-    if (state.can_update) sidebar_button(layout::UpdateApp,count+2,"Actualizar app",false,Icon::Download,true,16);
+    if (count > visible) {
+        const Rect track{219, layout::PlatformViewport.y, 3, layout::PlatformViewport.h};
+        const auto thumb = track.h * static_cast<float>(visible) / static_cast<float>(count);
+        const auto y = track.y + (track.h - thumb) * static_cast<float>(offset) / static_cast<float>(count - visible);
+        Fill(vg, track, Alpha(Cyan,.22f), 1.5f);
+        Fill(vg, {track.x,y,track.w,thumb}, Cyan, 1.5f);
+    }
     if (sidebar_focus.w > 0) FocusRing(vg,sidebar_focus);
-    Line(vg,38,561,214,561,Alpha(Border,.9f));
-    DrawIcon(vg,Icon::Card,39,578,23,Muted);
-    nvgSave(vg);nvgIntersectScissor(vg,69,570,146,35);Text(vg,70,590,13,Muted,state.storage.c_str());nvgRestore(vg);
+
+    const auto toolbar_button = [&](Rect bounds, size_t index, const char* label, Icon icon) {
+        Button(vg,bounds,label,false,false,icon,true,17.f);
+        if (state.toolbar_focused && state.toolbar_index == index) FocusRing(vg,bounds);
+    };
+    toolbar_button(layout::Downloads,0,"Descargas",Icon::Download);
+    toolbar_button(layout::Settings,1,"Ajustes",Icon::Settings);
+    if (state.can_update) toolbar_button(layout::UpdateApp,2,"Actualizar app",Icon::Download);
+    DrawIcon(vg,Icon::Card,layout::Storage.x,layout::Storage.y+5,22,Muted);
+    CatalogLabel(vg,{layout::Storage.x+30,layout::Storage.y,layout::Storage.w-30,layout::Storage.h},
+        state.storage,14,Muted,false);
 
     Line(vg,251,104,242,130,Cyan,6);
     CatalogLabel(vg,{266,97,354,40},state.heading,29);
@@ -119,7 +128,7 @@ inline void DrawCatalogPanel(NVGcontext* vg, const CatalogPanelState& state) {
     for(size_t index=0;index<state.cards.size();++index) {
         const auto& item=state.cards[index];
         const Rect card=item.bounds.w>0?item.bounds:state.list_view?layout::ListAt(index):layout::CardAt(index);
-        const auto focused=item.selected&&!state.sidebar_focused&&!state.detail_focused;
+        const auto focused=item.selected&&!state.sidebar_focused&&!state.detail_focused&&!state.toolbar_focused;
         Panel(vg,card,item.selected?Cyan:Border,false,6.f);
         if(state.list_view) {
             const Rect art{card.x+8,card.y+3,44,card.h-6};
@@ -139,6 +148,6 @@ inline void DrawCatalogPanel(NVGcontext* vg, const CatalogPanelState& state) {
         if(focused) FocusRing(vg,card,6.f);
     }
     nvgRestore(vg);
-    Text(vg,layout::ListCard.x+layout::ListCard.w*.5f,625,14,Muted,state.page.c_str(),NVG_ALIGN_CENTER|NVG_ALIGN_MIDDLE);
+    Text(vg,layout::ListCard.x+layout::ListCard.w*.5f,590,14,Muted,state.page.c_str(),NVG_ALIGN_CENTER|NVG_ALIGN_MIDDLE);
 }
 }

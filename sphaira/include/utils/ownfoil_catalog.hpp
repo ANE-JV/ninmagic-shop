@@ -2,6 +2,7 @@
 #pragma once
 #include "utils/ownfoil_index.hpp"
 #include <array>
+#include <bitset>
 #include <unordered_set>
 
 namespace sphaira::ownfoil::index {
@@ -9,32 +10,96 @@ struct ConsolidationStatus {
     std::size_t folders{}, mapped_folders{}, ambiguous_folders{}, unresolved_folders{};
 };
 
-// NeroMagic's own collections use these exact forwarder ID series. The
-// prefixes describe this catalog, not the platform of arbitrary Switch IDs.
+struct RetroSeries {
+    std::string_view prefix, platform;
+    std::string_view first_suffix, first_title, second_suffix, second_title;
+};
+
+// Landmarks from the shared catalog's package names. A mirror must supply two
+// matching names and IDs independently for each series it exposes.
+inline constexpr RetroSeries RetroSeriesList[]{
+    {"05100000", "PSP", "00010000", "1000 Tiny Claws", "00030000", "20Q"},
+    {"05103000", "PSP", "00010000", "Arthur and the Minimoys", "00030000", "Exit 2"},
+    {"05107000", "PlayStation", "00010000", "007 - Racing", "00030000", "007 - The World Is Not Enough"},
+    {"05108000", "Nintendo 3DS / 2DS", "00010000", "Neko Tomo", "00030000", "Dragon Quest Monsters - Joker 3 Professional"},
+    {"05122000", "Nintendo 64", "00010000", "007 - The World Is Not Enough", "00030000", "1080 Snowboarding"},
+    {"05158000", "Game Boy Advance", "00010000", "007 - Everything or Nothing", "00030000", "007 - Nightfire"},
+    {"05269000", "Game Boy Color", "00010000", "10-Pin Bowling", "00030000", "1942"},
+    {"05275000", "Nintendo DS", "00010000", "007 - Quantum of Solace", "00030000", "1 vs 100"},
+    {"05417000", "Game Gear", "00010000", "Adventures of Batman & Robin, The", "00030000", "Aerial Assault"},
+    {"05444000", "Master System", "00010000", "Action Fighter", "00030000", "Aerial Assault"},
+    {"05500000", "Dreamcast", "00010000", "102 Dalmatians - Puppies to the Rescue", "00030000", "18 Wheeler - American Pro Trucker (1)"},
+    {"05501000", "Dreamcast", "00010000", "GaiaMaster - Kessen! Seiki-ou Densetsu", "00030000", "Gakkyuu-ou Yamazaki - Yamazaki Oukoku Daifunsou!"},
+    {"05502000", "Dreamcast", "00010000", "Maboroshi Tsukiyo Taikenban", "00030000", "Maboroshi Tsukiyo"},
+    {"05503000", "Dreamcast", "00010000", "Saka Tsuku Tokudai-gou - J.League Pro Soccer Club o Tsukurou!", "00030000", "Saka Tsuku Tokudai-gou 2 - J.League Pro Soccer Club o Tsukurou!"},
+    {"05572000", "NES", "00010000", "1942", "00030000", "1943 - The Battle of Midway"},
+    {"05574000", "Game Boy", "00010000", "Adventure Island II - Aliens in Paradise", "00030000", "Adventure Island"},
+    {"05598000", "Neo Geo", "00010000", "2020 Super Baseball", "00030000", "3 Count Bout"},
+    {"05625000", "Mega Drive", "00010000", "3 Ninjas Kick Back", "00030000", "6-Pak"},
+    {"05748000", "Sega 32X", "00010000", "After Burner Complete", "00030000", "Amazing Spider-Man, The - Web of Fire"},
+    {"05758000", "Sega CD", "00010000", "3 Ninjas Kick Back", "00030000", "A-X-101"},
+    {"05852000", "Super Nintendo", "00010000", "3x3 Eyes - Juuma Houkan", "00030000", "7th Saga Redux, The"},
+    {"05871000", "Commodore 64", "00010000", "007 - The Living Daylights", "00030000", "100000 Pyramid The"},
+    {"05872000", "ColecoVision", "00010000", "3-D Genesis", "00030000", "3-D Ghost Attack"},
+    {"05919000", "Atari 7800", "00010000", "Ace of Aces", "00030000", "Alien Brigade Joystick"},
+    {"05920000", "PC Engine", "00010000", "Aero Blasters", "00030000", "Air Zonk"},
+    {"05921000", "Atari Jaguar", "00100000", "Aircars", "00300000", "Alien vs Predator"},
+};
+using ConfirmedRetroSeries = std::bitset<std::size(RetroSeriesList)>;
+
+inline auto FindRetroSeries(std::string_view id) -> const RetroSeries* {
+    if (!id.starts_with("05") || id.size() != 16
+        || !std::all_of(id.begin(), id.end(), [](char c) { return HexDigit(c) >= 0; })) return nullptr;
+    const auto prefix = id.substr(0, 8);
+    const auto series = std::lower_bound(std::begin(RetroSeriesList), std::end(RetroSeriesList), prefix,
+        [](const auto& entry, std::string_view value) { return entry.prefix < value; });
+    return series != std::end(RetroSeriesList) && series->prefix == prefix ? series : nullptr;
+}
+
+// The prefixes describe these collections rather than arbitrary Switch IDs.
 inline auto NeroMagicPlatform(std::string_view server, std::string_view id, std::string_view name) -> std::string_view {
     if (server.ends_with('/')) server.remove_suffix(1);
     if (server != "https://neromagic.switchip.es" && server != "https://neromagic.switchip.es:443") return {};
     if (id.size() != 16 || !std::all_of(id.begin(), id.end(), [](char c) { return HexDigit(c) >= 0; })) return {};
 
-    for (const auto& [prefix, platform] : {
-        std::pair{"05100000", "PSP"}, {"05103000", "PSP"}, {"05107000", "PlayStation"},
-        {"05108000", "Nintendo 3DS / 2DS"}, {"05275000", "Nintendo DS"}, {"05572000", "NES"},
-        {"05852000", "Super Nintendo"}, {"05122000", "Nintendo 64"}, {"05158000", "Game Boy Advance"},
-        {"05574000", "Game Boy"}, {"05269000", "Game Boy Color"}, {"05625000", "Mega Drive"},
-        {"05444000", "Master System"}, {"05417000", "Game Gear"}, {"05500000", "Dreamcast"},
-        {"05501000", "Dreamcast"}, {"05502000", "Dreamcast"}, {"05503000", "Dreamcast"},
-        {"05598000", "Neo Geo"}, {"05758000", "Sega CD"}, {"05748000", "Sega 32X"},
-        {"05871000", "Commodore 64"}, {"05872000", "ColecoVision"}, {"05919000", "Atari 7800"},
-        {"05920000", "PC Engine"}, {"05921000", "Atari Jaguar"}}) {
-        if (id.starts_with(prefix)) return platform;
-    }
+    if (const auto series = FindRetroSeries(id)) return series->platform;
+    return BrandedRetroPlatform(name);
+}
 
-    const auto title = Lower(std::string{name});
-    if (title.starts_with("aca neogeo ") || title.starts_with("aca neo geo ")) return "Neo Geo";
-    if (title.starts_with("neogeo pocket color selection ") || title.starts_with("neo geo pocket color selection ")) return "Neo Geo Pocket";
-    if (title.starts_with("arcade archives ") || title.starts_with("johnny turbo's arcade:") ||
-        title.starts_with("johnny turbo’s arcade:")) return "Arcade";
-    return {};
+inline bool IsNinMagicArtwork(std::string_view artwork_provider) {
+    if (artwork_provider.ends_with('/')) artwork_provider.remove_suffix(1);
+    return artwork_provider == "https://ninmagic.com/juegos" || artwork_provider == "https://www.ninmagic.com/juegos";
+}
+
+template<class Rows, class Eligible>
+inline auto ApplyVerifiedRetroSeries(Rows& files, std::string_view artwork_provider, Eligible eligible,
+    ConfirmedRetroSeries verified = {}) -> ConfirmedRetroSeries {
+    if (!IsNinMagicArtwork(artwork_provider)) return {};
+    ConfirmedRetroSeries first, second;
+    for (const auto& file : files) {
+        if (!eligible(file)) continue;
+        const auto series = FindRetroSeries(file.id);
+        if (!series || (!file.platform.empty() && file.platform != series->platform)) continue;
+        const auto index = static_cast<size_t>(series - RetroSeriesList);
+        const auto suffix = std::string_view{file.id}.substr(8);
+        if (suffix == series->first_suffix && file.name == series->first_title) first.set(index);
+        if (suffix == series->second_suffix && file.name == series->second_title) second.set(index);
+    }
+    verified |= first & second;
+    for (auto& file : files) {
+        if (!eligible(file)) continue;
+        const auto series = FindRetroSeries(file.id);
+        if (file.platform.empty() && series && verified[static_cast<size_t>(series - RetroSeriesList)]) {
+            file.platform = series->platform;
+            file.platform_learned = true;
+        } else if (file.platform.empty() || (file.platform_learned && file.platform == "Nintendo Switch")) {
+            if (const auto branded = BrandedRetroPlatform(file.name); !branded.empty()) {
+                file.platform = branded;
+                file.platform_learned = true;
+            }
+        }
+    }
+    return verified;
 }
 
 // The NinMagic NES set uses its own forwarder IDs. These are not console
@@ -42,8 +107,7 @@ inline auto NeroMagicPlatform(std::string_view server, std::string_view id, std:
 // following three titles by both ID and name, including on private mirrors.
 template<class Rows, class Eligible>
 inline bool ApplyNinMagicCollection(Rows& files, std::string_view artwork_provider, Eligible eligible, bool previously_confirmed = false) {
-    if (artwork_provider.ends_with('/')) artwork_provider.remove_suffix(1);
-    if (artwork_provider != "https://ninmagic.com/juegos" && artwork_provider != "https://www.ninmagic.com/juegos") return false;
+    if (!IsNinMagicArtwork(artwork_provider)) return false;
 
     constexpr std::array<std::pair<std::string_view, std::string_view>, 3> landmarks{{
         {"0557200000010000", "1942"},
@@ -75,9 +139,11 @@ inline bool ApplyNinMagicCollection(Rows& files, std::string_view artwork_provid
 }
 
 inline void ApplyNinMagicPlatforms(std::vector<File>& files, std::string_view artwork_provider) {
-    ApplyNinMagicCollection(files, artwork_provider, [](const File& file) {
+    const auto eligible = [](const File& file) {
         return !file.directory && (file.kind == Kind::Base || file.kind == Kind::Unknown);
-    });
+    };
+    ApplyVerifiedRetroSeries(files, artwork_provider, eligible);
+    ApplyNinMagicCollection(files, artwork_provider, eligible);
 }
 
 // Convert a library's per-game directory into a game card only when the
