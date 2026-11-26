@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "app": "NinMagic Shop",
-  "version": "0.1.15",
-  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/9c540dc927f945d26f1af8fed3c9d23e4229e1ef/releases/0.1.15/NinMagic-Shop.nro",
+  "version": "0.1.16",
+  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/9345f8f40b52e74addfdbfdc38b8833b7c243292/releases/0.1.16/NinMagic-Shop.nro",
   "bytes": 4802082,
-  "sha256": "f99abf15221ebc100dfc9b3887f233556a1c88b7788ee41fea73eba3d60f1c1f",
-  "notes": "Logos en el menú de consolas, fondo magenta con tonos celestes, carátulas sin sombreado lateral y punto azul cuando hay una actualización."
+  "sha256": "59182e5d749de0c869e7294b02afb7ab15877b9c9af243013a34e4e82eb57d68",
+  "notes": "Carátulas de borde a borde con el nombre debajo. Al elegir una consola, el cursor se queda en la lista de la izquierda. Pulsa derecha para pasar a los juegos."
 }
