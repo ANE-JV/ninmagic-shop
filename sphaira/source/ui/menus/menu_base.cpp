@@ -86,7 +86,7 @@ void MenuBase::Draw(NVGcontext* vg, Theme* theme) {
     const auto status = m_shop_connected ? "Servidor conectado" : m_shop_connecting ? "Conectando…" :
         pdata.ip ? "Elige tu tienda" : "Sin conexión";
     shop::Header(vg, m_shop_logo, status, m_shop_connected, m_shop_connecting,
-        pdata.battery, pdata.ip != 0, static_cast<bool>(m_shop_account_action));
+        pdata.battery, pdata.ip != 0, static_cast<bool>(m_shop_account_action), "v" APP_VERSION);
     if (!m_shop_layout) {
         nvgSave(vg);
         nvgIntersectScissor(vg, 137.f, 64.f, 580.f, 23.f);

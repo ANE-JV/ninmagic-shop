@@ -187,7 +187,7 @@ inline float ControllerHint(NVGcontext* vg, float x, float y, const char* key, c
     return advance * scale;
 }
 inline void Header(NVGcontext* vg, int logo, const char* status, bool connected,
-        bool connecting, int battery, bool network, bool show_account = true) {
+        bool connecting, int battery, bool network, bool show_account = true, const char* version = "") {
     Fill(vg, {0, 0, 1280, 88}, nvgRGB(5, 15, 29), 0.f);
     if (logo) {
         nvgBeginPath(vg); nvgRoundedRect(vg, 37, 9, 74, 74, 8);
@@ -199,6 +199,7 @@ inline void Header(NVGcontext* vg, int logo, const char* status, bool connected,
     nvgLineTo(vg, 424, 61); nvgLineTo(vg, 343, 61); nvgClosePath(vg);
     nvgFillColor(vg, Amber); nvgFill(vg);
     Text(vg, 388, 46, 23, Navy, "SHOP", NVG_ALIGN_CENTER | NVG_ALIGN_MIDDLE, true);
+    Text(vg, 445, 46, 20, White, version, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE, true);
     // The cyan/violet circuit strokes are part of the reference header.
     nvgBeginPath(vg); nvgMoveTo(vg, 30, 87); nvgLineTo(vg, 438, 87);
     nvgLineTo(vg, 447, 79); nvgLineTo(vg, 583, 79); nvgLineTo(vg, 603, 59);
