@@ -54,6 +54,15 @@ bool ConfigureCurlTrust(CURL* curl) {
 }
 }
 namespace sphaira::curl { constexpr char USER_AGENT[] = "Sphaira/1.1.1 NinMagicShop/wire-test"; }
+namespace sphaira::ui {
+struct ProgressBox {
+    s64 bytes{};
+    bool streaming{};
+    void BeginStreamingDownload() { streaming = true; }
+    void AddDownloadedBytes(s64 count) { assert(streaming); bytes += count; }
+    void EndStreamingDownload() { streaming = false; }
+};
+}
 namespace sphaira::devoptab::common {
 struct PushThreadData {
     PushThreadData(CURL* handle, std::stop_token) : curl{handle} {}
@@ -127,7 +136,6 @@ int main(int argc, char** argv) {
     const std::string origin{argv[1]};
     response_buffer::Check(origin);
     using sphaira::yati::source::Http;
-    Http package{origin + "wire/file", "wire-user", "wire-pass", {}, true};
     std::array<char, 3> data{};
     u64 count{};
     for (const auto& [endpoint, legacy] : {std::pair{"wire/modern", false}, {"wire/legacy", true}}) {
@@ -135,21 +143,27 @@ int main(int argc, char** argv) {
         assert(negotiated.Read(data.data(), 0, data.size(), &count) == 0 && count == 3);
         assert(std::string_view(data.data(), count) == "012");
     }
-    assert(package.Read(data.data(), 0, data.size(), &count) == 0 && count == 3);
-    assert(std::string_view(data.data(), count) == "012");
-    assert(package.Read(data.data(), 3, data.size(), &count) == 0 && count == 3);
-    assert(std::string_view(data.data(), count) == "345");
-    assert(package.Read(data.data(), 9, data.size(), &count) == 0 && count == 3);
-    assert(std::string_view(data.data(), count) == "9ab");
+    sphaira::ui::ProgressBox progress;
+    {
+        Http package{origin + "wire/file", "wire-user", "wire-pass", {}, true, &progress};
+        assert(progress.streaming && progress.bytes == 0);
+        assert(package.Read(data.data(), 0, data.size(), &count) == 0 && count == 3);
+        assert(std::string_view(data.data(), count) == "012" && progress.bytes == 16);
+        assert(package.Read(data.data(), 3, data.size(), &count) == 0 && count == 3);
+        assert(std::string_view(data.data(), count) == "345" && progress.bytes == 16);
+        assert(package.Read(data.data(), 9, data.size(), &count) == 0 && count == 3);
+        assert(std::string_view(data.data(), count) == "9ab" && progress.bytes == 23);
+    }
+    assert(!progress.streaming && progress.bytes == 23);
     Http large{origin + "wire/large", "wire-user", "wire-pass", {}, true};
     assert(large.Read(data.data(), (s64{1} << 32) + 1, data.size(), &count) == 0 && count == 3);
     assert(std::string_view(data.data(), count) == "123");
     for (const auto& [path, expected] : {std::pair{"wire/dead-alias", Result_YatiHttpFileNotFound},
             {"wire/gone", Result_YatiHttpFileNotFound}, {"wire/denied", Result_YatiHttpAccessDenied},
             {"wire/wrong-range", Result_YatiHttpReadFailed}}) {
-        Http rejected{origin + path, "wire-user", "wire-pass", {}, true};
+        Http rejected{origin + path, "wire-user", "wire-pass", {}, true, &progress};
         assert(rejected.Read(data.data(), 9, data.size(), &count) == expected);
-        assert(count == 0);
+        assert(count == 0 && progress.bytes == 23);
     }
     Http unauthorized{origin + "wire/file", "wire-user", "incorrect-password", {}, true};
     assert(unauthorized.Read(data.data(), 0, data.size(), &count) == Result_YatiHttpAccessDenied && count == 0);

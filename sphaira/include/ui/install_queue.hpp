@@ -23,7 +23,7 @@ public:
 
     struct Job {
         std::string name{};
-        int image{};                   // shown in the progress box, may be 0.
+        std::shared_ptr<const int> cover;
         ProgressBoxCallback callback{};
         State state{State::Waiting};
         Result rc{};
@@ -35,7 +35,7 @@ public:
     // queues a job, starting it right away when nothing runs. the first job of
     // an idle queue opens its progress box, the rest start where the previous
     // one was left: on screen if it was being watched, in the background if not.
-    void Add(const std::string& name, int image, const ProgressBoxCallback& callback);
+    void Add(const std::string& name, std::shared_ptr<const int> cover, const ProgressBoxCallback& callback);
 
     // called once per frame by the app, after the widgets have updated.
     void Update();
@@ -46,14 +46,17 @@ public:
 
     // true while an install runs or waits.
     auto IsBusy() const -> bool;
+    auto HasActiveJob() const -> bool { return m_box != nullptr; }
     auto GetPendingCount() const -> size_t;
     // bumped every time a job finishes, for pages that show what is installed.
     auto GetFinishedCounter() const -> u64 { return m_finished_counter; }
 
     // the queue screen.
     void ShowMenu();
+    void ShowProgressMenu();
 
 private:
+    class ProgressMenu;
     void Start(Job& job);
     void Show();
     void Hide();
@@ -77,6 +80,7 @@ private:
     bool m_hide_pending{};   // B was pressed on the box, detach it next update.
     bool m_cancel_pending{}; // the running job was cancelled by the user.
     bool m_shutdown{};
+    bool m_progress_menu_open{};
 };
 
 } // namespace sphaira::ui

@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <deque>
 #include <functional>
 #include <string_view>
 #include <utility>
@@ -322,8 +323,8 @@ void DeleteTexture(int image) {
 auto LoadShopImage(const sphaira::ownfoil::Config& config, const std::string& artwork_id, const api::ShopImage& image,
         const char* kind, std::stop_token token) -> ImageResult {
     const std::string_view use{kind};
-    const bool card = use == "card" || use == "icon";
-    const int max_edge = card ? 256 : use.starts_with("preview") ? 640 : use == "screen" ? 1280 : 1024;
+    const bool card = use == "card" || use == "icon" || use == "queue";
+    const int max_edge = use == "queue" ? 160 : card ? 256 : use.starts_with("preview") ? 640 : use == "screen" ? 1280 : 1024;
     auto decoded = FetchImage(config, artwork_id, image, kind, max_edge, token);
     const bool backdrop = use.starts_with("banner") || use.starts_with("preview");
     if (!decoded.data.empty() || token.stop_requested() || (!card && !backdrop)) return decoded;
@@ -342,6 +343,96 @@ auto BuildImageCache(const std::string& app_id, const std::string& url, const ch
 ShopCardTexture::~ShopCardTexture() {
     DeleteTexture(handle);
 }
+
+namespace {
+// Jobs without a ready catalog texture share one decoder. All queue management
+// and NanoVG work stays on the UI thread. Reading artwork never holds an install.
+class QueueCoverReader : public std::enable_shared_from_this<QueueCoverReader> {
+public:
+    static auto Get() -> std::shared_ptr<QueueCoverReader> {
+        static std::weak_ptr<QueueCoverReader> current;
+        auto reader = current.lock();
+        if (!reader) {
+            reader = std::make_shared<QueueCoverReader>();
+            current = reader;
+        }
+        return reader;
+    }
+
+    void Add(std::function<void()> read) {
+        m_waiting.emplace_back(std::move(read));
+        if (!m_worker) Next();
+    }
+
+private:
+    void Next() {
+        m_worker.reset();
+        while (!m_waiting.empty()) {
+            auto read = std::move(m_waiting.front());
+            m_waiting.pop_front();
+            m_worker = std::make_unique<utils::Async>([self = weak_from_this(), read = std::move(read)] {
+                read();
+                evman::push(evman::CallbackEventData{[self] {
+                    if (auto reader = self.lock()) reader->Next();
+                }, {}}, false);
+            });
+            if (m_worker->IsRunning()) return;
+            m_worker.reset();
+        }
+    }
+
+    std::deque<std::function<void()>> m_waiting;
+    std::unique_ptr<utils::Async> m_worker;
+};
+
+struct QueuedCover {
+    ShopCardTexture texture;
+    std::stop_source stop;
+    std::shared_ptr<QueueCoverReader> reader{QueueCoverReader::Get()};
+    ~QueuedCover() { stop.request_stop(); }
+};
+
+auto RetainQueueCover(const TitlePage& page, const api::ShopImage& banner,
+        const sphaira::ownfoil::Config& profile, const std::string& base_url) -> std::shared_ptr<const int> {
+    if (page.card_texture && page.card_texture->handle) {
+        return {page.card_texture, &page.card_texture->handle};
+    }
+
+    const auto id = page.artwork_id.empty() ? page.id : page.artwork_id;
+    auto image = page.icon.url.empty() ? banner : page.icon;
+    if (image.url.empty()) image = {api::FallbackArtworkUrl(id, false), false};
+    if (image.url.empty()) return {};
+
+    image.local = image.local && sphaira::ownfoil::IsSameOrigin(base_url, image.url);
+    sphaira::ownfoil::Config config;
+    config.revalidate_artwork = profile.revalidate_artwork;
+    if (image.local) {
+        config.user = profile.user;
+        config.pass = profile.pass;
+    }
+    auto cover = std::make_shared<QueuedCover>();
+    cover->reader->Add([weak = std::weak_ptr{cover}, token = cover->stop.get_token(),
+            config = std::move(config), id, image = std::move(image)] {
+        if (token.stop_requested()) return;
+        ImageResult pixels;
+        if (!config.revalidate_artwork) {
+            for (const char* kind : {"card", "icon", "preview", "banner"}) {
+                const auto path = BuildImageCache(id, image.url, kind);
+                if (fs::FsNativeSd().FileExists(path)) pixels = ImageLoadArtworkFile(path, 160);
+                if (!pixels.data.empty() || token.stop_requested()) break;
+            }
+        }
+        if (pixels.data.empty() && !token.stop_requested()) {
+            pixels = LoadShopImage(config, id, image, "queue", token);
+        }
+        if (pixels.data.empty() || token.stop_requested()) return;
+        evman::push(evman::CallbackEventData{[weak, pixels = std::move(pixels)] {
+            if (auto owner = weak.lock()) owner->texture.handle = CreateTexture(pixels);
+        }, token}, false);
+    });
+    return {cover, &cover->texture.handle};
+}
+} // namespace
 
 void TitleMenu::LoadDetailBanner(const api::ShopImage& image, int TitleMenu::*destination) {
     const auto token = m_stop.get_token();
@@ -1451,11 +1542,12 @@ void TitleMenu::Install() {
     // the queue reports and refreshes this page itself: the install can outlive
     // the page, so nothing here may be captured by it. a running install is
     // either on screen or off the stack, so only the install menu is closed.
-    App::PopToMenu();
-    InstallQueue::Get().Add(GetName(), 0, [config = m_config, base_url = m_base_url, targets](ProgressBox* pbox) -> Result {
+    const auto name = GetName();
+    auto cover = RetainQueueCover(m_page, GetBanner(), m_config, m_base_url);
+    auto install = [config = m_config, base_url = m_base_url, targets = std::move(targets)](ProgressBox* pbox) -> Result {
         for (const auto& target : targets) {
             const auto local = sphaira::ownfoil::IsSameOrigin(base_url, target.download.url);
-            yati::source::Http source{target.download.url, local ? config.user : "", local ? config.pass : "", pbox->GetToken(), config.legacy_headers};
+            yati::source::Http source{target.download.url, local ? config.user : "", local ? config.pass : "", pbox->GetToken(), config.legacy_headers, pbox};
 
             yati::ConfigOverride config_override{};
             config_override.title_ids = target.ids;
@@ -1466,7 +1558,9 @@ void TitleMenu::Install() {
         }
 
         R_SUCCEED();
-    });
+    };
+    App::PopToMenu();
+    InstallQueue::Get().Add(name, std::move(cover), install);
 }
 
 void TitleMenu::ShowAddons(const std::function<void()>& changed) {

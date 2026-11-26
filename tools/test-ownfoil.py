@@ -54,7 +54,8 @@ def main():
     (args.output / "production_show_search.inc").write_text("\n".join([menu[start:end], *platforms]), encoding="utf-8")
     search_exe = args.output / ("test_shop_search.exe" if sys.platform == "win32" else "test_shop_search")
     subprocess.run([args.cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-O1",
-        "-I", compiler_path(args.cxx, args.output), compiler_path(args.cxx, ROOT / "tools/tests/test_shop_search.cpp"),
+        "-I", compiler_path(args.cxx, args.output), "-I", compiler_path(args.cxx, ROOT / "sphaira/include"),
+        compiler_path(args.cxx, ROOT / "tools/tests/test_shop_search.cpp"),
         "-o", compiler_path(args.cxx, search_exe)], check=True)
     subprocess.run([str(search_exe.resolve())], check=True)
     title = (ROOT / "sphaira/source/ui/menus/ownfoil_title.cpp").read_text(encoding="utf-8")

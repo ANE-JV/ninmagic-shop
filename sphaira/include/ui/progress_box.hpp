@@ -18,6 +18,21 @@ enum class ProgressBoxOption : u8 {
     ScreenToggle,
 };
 
+enum class TransferPhase : u8 {
+    Preparing,
+    Downloading,
+    DownloadingAndInstalling,
+    Installing,
+};
+
+struct TransferProgress {
+    TransferPhase phase{TransferPhase::Preparing};
+    // HTTP payload received by the job. A streaming package may skip or
+    // re-request ranges, so its file size is not a download total.
+    s64 bytes{}, total{}, bytes_per_second{};
+    s64 file_bytes{}, file_total{}, file_bytes_per_second{};
+};
+
 struct ProgressBox final : Widget {
     ProgressBox(
         int image,
@@ -48,6 +63,11 @@ struct ProgressBox final : Widget {
     void SetHideAction(const std::function<void()>& on_hide);
     // thread safe, for drawing the progress of a box that isn't on screen.
     void GetProgress(s64& offset, s64& size);
+    auto GetTransferProgress() -> TransferProgress;
+
+    void BeginStreamingDownload();
+    void AddDownloadedBytes(s64 bytes);
+    void EndStreamingDownload();
 
     void RequestExit();
     auto ShouldExit() -> bool;
@@ -112,7 +132,10 @@ private:
     s64 m_offset{};
     s64 m_last_offset{};
     s64 m_speed{};
-    TimeStamp m_timestamp{};
+    TimeStamp m_timestamp{}, m_file_activity{};
+    bool m_streaming_download{};
+    s64 m_download_bytes{}, m_download_sample_bytes{}, m_download_speed{};
+    TimeStamp m_download_sample{}, m_download_activity{};
     std::vector<u8> m_image_data{};
     int m_image_pending{};
     bool m_is_image_pending{};

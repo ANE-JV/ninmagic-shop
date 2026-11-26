@@ -1,14 +1,21 @@
 #include "ui/install_queue.hpp"
+#include "ui/menus/menu_base.hpp"
 #include "ui/option_box.hpp"
+#include "ui/shop_transfers_panel.hpp"
 #include "ui/sidebar.hpp"
 #include "ui/nvg_util.hpp"
 #include "app.hpp"
 #include "defines.hpp"
 #include "log.hpp"
 #include "i18n.hpp"
+#include "utils/utils.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstdio>
+#include <optional>
+#include <utility>
 
 namespace sphaira::ui {
 namespace {
@@ -18,20 +25,139 @@ constexpr float PILL_W = 420.f;
 constexpr float PILL_H = 44.f;
 constexpr float PILL_Y = 18.f;
 
+auto CoverImage(const InstallQueue::Job& job) -> int {
+    return job.cover ? *job.cover : 0;
+}
+
+auto TransferStatus(TransferPhase phase) -> const char* {
+    switch (phase) {
+        case TransferPhase::Preparing: return "Preparando";
+        case TransferPhase::Downloading: return "Descargando";
+        case TransferPhase::DownloadingAndInstalling: return "Descargando e instalando";
+        case TransferPhase::Installing: return "Instalando";
+    }
+    return "Preparando";
+}
+
+auto TimeRemaining(s64 remaining, s64 rate) -> std::string {
+    if (rate <= 0) return "—";
+    const auto seconds = remaining / rate + (remaining % rate != 0);
+    if (seconds >= 3600) return std::to_string(seconds / 3600) + " h " + std::to_string(seconds / 60 % 60) + " min";
+    if (seconds >= 60) return std::to_string(seconds / 60) + " min " + std::to_string(seconds % 60) + " s";
+    return std::to_string(seconds) + " s";
+}
+
+auto DescribeTransfer(const InstallQueue::Job& job, ProgressBox& box) -> shop::TransferCard {
+    const auto progress = box.GetTransferProgress();
+    shop::TransferCard result{};
+    result.name = job.name;
+    result.image = CoverImage(job);
+    result.status = TransferStatus(progress.phase);
+    result.speed = progress.bytes_per_second > 0 ? utils::formatSizeNetwork(progress.bytes_per_second) + "/s" : "—";
+    result.remaining = "—";
+    result.file_progress = progress.total <= 0 && progress.file_total > 0;
+    const auto total = result.file_progress ? progress.file_total : progress.total;
+    if (total > 0) {
+        const auto bytes = std::clamp(result.file_progress ? progress.file_bytes : progress.bytes, s64{0}, total);
+        result.amount = utils::formatSizeStorage(bytes) + " de " + utils::formatSizeStorage(total);
+        result.fraction = static_cast<float>(static_cast<double>(bytes) / total);
+        const auto rate = result.file_progress ? progress.file_bytes_per_second : progress.bytes_per_second;
+        result.remaining = TimeRemaining(total - bytes, rate);
+    }
+    return result;
+}
+
 } // namespace
+
+class InstallQueue::ProgressMenu final : public menu::MenuBase {
+public:
+    explicit ProgressMenu(InstallQueue& queue)
+    : MenuBase{"En curso", menu::MenuFlag_None}, m_queue{queue} {
+        SetShopLayout();
+        RemoveAction(Button::START);
+        SetAction(Button::B, Action{[this] { SetPop(); }});
+        m_queue.m_progress_menu_open = true;
+    }
+
+    ~ProgressMenu() override { m_queue.m_progress_menu_open = false; }
+    auto GetShortTitle() const -> const char* override { return "En curso"; }
+
+    void Update(Controller* controller, TouchInfo* touch) override {
+        MenuBase::Update(controller, touch);
+        if (ShouldPop()) return;
+        if (touch->is_clicked && touch->in_range(242, 650, 118, 48)) {
+            SetPop();
+            return;
+        }
+
+        const auto count = m_queue.GetPendingCount();
+        m_scroll.Select(m_scroll.selected, count);
+        if (controller->GotDown(Button::UP) && m_scroll.selected > 0) {
+            m_scroll.Select(m_scroll.selected - 1, count);
+        } else if (controller->GotDown(Button::DOWN) && m_scroll.selected + 1 < count) {
+            m_scroll.Select(m_scroll.selected + 1, count);
+        }
+
+        const auto inside_queue = [](float x, float y) {
+            const auto rect = shop::WaitingViewport;
+            return x >= rect.x && x < rect.x + rect.w && y >= rect.y && y < rect.y + rect.h;
+        };
+        if (touch->is_scroll && inside_queue(touch->initial.x, touch->initial.y)) {
+            if (!m_drag_origin) m_drag_origin = m_scroll.first;
+            const auto delta = static_cast<float>(touch->initial.y) - static_cast<float>(touch->cur.y);
+            const auto offset = static_cast<s64>(*m_drag_origin) + std::lround(delta / shop::WaitingRowStep);
+            m_scroll.ScrollTo(static_cast<std::size_t>(std::max<s64>(0, offset)), count);
+        }
+        if (touch->is_end) m_drag_origin.reset();
+        if (touch->is_clicked && inside_queue(touch->cur.x, touch->cur.y)) {
+            const auto row = static_cast<std::size_t>((touch->cur.y - shop::WaitingViewport.y) / shop::WaitingRowStep);
+            if (row < shop::VisibleQueuedGames && m_scroll.first + row < count) {
+                m_scroll.Select(m_scroll.first + row, count);
+            }
+        }
+    }
+
+    void Draw(NVGcontext* vg, Theme* theme) override {
+        SetShopConnection(GetPolledData().ip != 0);
+        MenuBase::Draw(vg, theme);
+        const auto count = m_queue.GetPendingCount();
+        m_scroll.Select(m_scroll.selected, count);
+
+        std::array<shop::WaitingGame, shop::VisibleQueuedGames> waiting{};
+        std::size_t cursor{}, visible{};
+        for (const auto& job : m_queue.m_jobs) {
+            if (job.state != State::Waiting) continue;
+            if (cursor++ < m_scroll.first) continue;
+            waiting[visible++] = {job.name, CoverImage(job)};
+            if (visible == waiting.size()) break;
+        }
+
+        const auto* job = m_queue.GetRunning();
+        auto* box = m_queue.GetRunningBox();
+        const auto active = job && box ? DescribeTransfer(*job, *box) : shop::TransferCard{};
+        shop::DrawTransferPanel(vg, active, std::span{waiting}.first(visible), m_scroll, count);
+        if (count > 1) shop::ControllerHint(vg, 54, 658, "↑", "Desplazar", shop::White, true, "↓");
+        shop::ControllerHint(vg, 249, 658, "B", "Atrás", shop::Red);
+    }
+
+private:
+    InstallQueue& m_queue;
+    shop::QueueScroll m_scroll;
+    std::optional<std::size_t> m_drag_origin;
+};
 
 auto InstallQueue::Get() -> InstallQueue& {
     static InstallQueue queue;
     return queue;
 }
 
-void InstallQueue::Add(const std::string& name, int image, const ProgressBoxCallback& callback) {
+void InstallQueue::Add(const std::string& name, std::shared_ptr<const int> cover, const ProgressBoxCallback& callback) {
     if (m_shutdown) {
         return;
     }
 
     const auto busy = IsBusy();
-    auto& job = m_jobs.emplace_back(Job{name, image, callback});
+    auto& job = m_jobs.emplace_back(Job{name, std::move(cover), callback});
     job.id = m_next_id++;
     log_write("[QUEUE] added %s (id %zu), busy: %u\n", name.c_str(), job.id, busy);
 
@@ -52,7 +178,7 @@ void InstallQueue::Start(Job& job) {
     log_write("[QUEUE] starting %s (id %zu), visible: %u\n", job.name.c_str(), job.id, m_visible);
 
     const auto id = job.id;
-    auto box = std::make_unique<ProgressBox>(job.image, "Installing "_i18n, job.name, job.callback, [this, id](Result rc) {
+    auto box = std::make_unique<ProgressBox>(CoverImage(job), "Installing "_i18n, job.name, job.callback, [this, id](Result rc) {
         // runs in the box's destructor, on the main thread.
         m_box = nullptr;
         m_finished_counter++;
@@ -70,6 +196,7 @@ void InstallQueue::Start(Job& job) {
             it->state = State::Failed;
         }
         it->rc = rc;
+        it->cover.reset();
         m_cancel_pending = false;
         log_write("[QUEUE] finished %s (id %zu) rc: 0x%X\n", it->name.c_str(), id, rc);
 
@@ -188,6 +315,7 @@ void InstallQueue::Shutdown() {
         m_hidden->RequestExit();
         m_hidden.reset();
     }
+    m_jobs.clear();
 }
 
 auto InstallQueue::IsBusy() const -> bool {
@@ -230,7 +358,7 @@ auto InstallQueue::StateName(State state) -> std::string {
 }
 
 void InstallQueue::Draw(NVGcontext* vg, Theme* theme) {
-    if (!m_box || m_visible) {
+    if (!m_box || m_visible || m_progress_menu_open) {
         return;
     }
 
@@ -265,6 +393,10 @@ void InstallQueue::Draw(NVGcontext* vg, Theme* theme) {
     gfx::drawTextArgs(vg, pill.x + 20.f, pill.y + 18.f, 18.f, NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE, theme->GetColour(ThemeEntryID_TEXT), "%s", job->name.c_str());
     nvgRestore(vg);
     gfx::drawTextArgs(vg, pill.x + pill.w - 20.f, pill.y + 18.f, 18.f, NVG_ALIGN_RIGHT | NVG_ALIGN_MIDDLE, theme->GetColour(ThemeEntryID_TEXT_INFO), "%s", right.c_str());
+}
+
+void InstallQueue::ShowProgressMenu() {
+    if (!m_shutdown && !m_progress_menu_open) App::Push<ProgressMenu>(*this);
 }
 
 void InstallQueue::ShowMenu() {

@@ -355,9 +355,15 @@ void Menu::FocusToolbar(size_t index) {
 }
 
 void Menu::ActivateToolbar() {
-    if (*m_toolbar_index == 0) InstallQueue::Get().ShowMenu();
-    else if (*m_toolbar_index == 1) ShowOptions();
-    else if (m_check_update) m_check_update();
+    using shop::layout::ToolbarAction;
+    switch (static_cast<ToolbarAction>(*m_toolbar_index)) {
+        case ToolbarAction::Downloads: InstallQueue::Get().ShowMenu(); break;
+        case ToolbarAction::InProgress: InstallQueue::Get().ShowProgressMenu(); break;
+        case ToolbarAction::Settings: ShowOptions(); break;
+        case ToolbarAction::UpdateApp:
+            if (m_check_update) m_check_update();
+            break;
+    }
 }
 void Menu::RetirePreview() {
     if (!m_preview) return;
@@ -467,9 +473,9 @@ void Menu::Update(Controller* controller, TouchInfo* touch) {
             for (size_t row = 0; row < shop::layout::VisiblePlatforms && m_sidebar_offset + row < choices.size(); ++row) if (touch->in_range(ToVec4(shop::layout::PlatformRow(row)))) {
                 m_sidebar_index = m_sidebar_offset + row; m_sidebar_focus = true; m_detail_focus = false; ActivateSidebar(); return;
             }
-            const std::array toolbar{shop::layout::Downloads, shop::layout::Settings, shop::layout::UpdateApp};
-            for (size_t index = 0; index < (m_check_update ? toolbar.size() : toolbar.size() - 1); ++index) {
-                if (!touch->in_range(ToVec4(toolbar[index]))) continue;
+            const auto toolbar_count = shop::layout::ToolbarCount(static_cast<bool>(m_check_update));
+            for (size_t index = 0; index < toolbar_count; ++index) {
+                if (!touch->in_range(ToVec4(shop::layout::ToolbarButtons[index]))) continue;
                 FocusToolbar(index);
                 ActivateToolbar();
                 return;
@@ -517,7 +523,7 @@ void Menu::Update(Controller* controller, TouchInfo* touch) {
             }
             if (controller->GotDown(Button::RIGHT)) m_sidebar_focus = false;
         } else if (m_toolbar_index) {
-            const size_t last = m_check_update ? 2 : 1;
+            const auto last = shop::layout::ToolbarCount(static_cast<bool>(m_check_update)) - 1;
             if (controller->GotDown(Button::LEFT) && *m_toolbar_index > 0) --*m_toolbar_index;
             if (controller->GotDown(Button::RIGHT) && *m_toolbar_index < last) ++*m_toolbar_index;
             if (controller->GotDown(Button::UP)) m_toolbar_index.reset();
@@ -647,6 +653,7 @@ void Menu::DrawHome(NVGcontext* vg, Theme* theme) {
     state.list_view = m_list_view.Get();
     state.can_update = static_cast<bool>(m_check_update);
     state.update_available = m_update_available && m_update_available();
+    state.has_active_install = InstallQueue::Get().HasActiveJob();
     state.platforms = PlatformChoices();
     if (m_sidebar_index < state.platforms.size()) {
         if (m_sidebar_index < m_sidebar_offset) m_sidebar_offset = m_sidebar_index;

@@ -16,6 +16,8 @@
 namespace sphaira::ui {
 namespace {
 
+constexpr u64 IdleTransferMs = 2000;
+
 void threadFunc(void* arg) {
     auto d = static_cast<ProgressBox::ThreadData*>(arg);
     d->result = d->callback(d->pbox);
@@ -124,6 +126,53 @@ void ProgressBox::GetProgress(s64& offset, s64& size) {
     size = m_size;
 }
 
+auto ProgressBox::GetTransferProgress() -> TransferProgress {
+    SCOPED_MUTEX(&m_mutex);
+    const bool installing = !m_transfer.empty() || m_size > 0;
+    const bool receiving = m_streaming_download && m_download_activity.GetMs() < IdleTransferMs;
+    const bool downloading = m_streaming_download && (receiving || !installing);
+    TransferPhase phase = TransferPhase::Preparing;
+    if (downloading) phase = installing ? TransferPhase::DownloadingAndInstalling : TransferPhase::Downloading;
+    else if (installing) phase = TransferPhase::Installing;
+    const auto file_speed = m_file_activity.GetMs() < IdleTransferMs ? m_speed : 0;
+    return {phase, m_download_bytes, 0, receiving ? m_download_speed : 0, m_offset, m_size, file_speed};
+}
+
+void ProgressBox::BeginStreamingDownload() {
+    SCOPED_MUTEX(&m_mutex);
+    m_streaming_download = true;
+    m_download_sample_bytes = m_download_bytes;
+    m_download_speed = 0;
+    m_download_sample.Update();
+    m_download_activity.Update();
+    m_transfer.clear();
+    m_size = m_offset = m_last_offset = m_speed = 0;
+    m_timestamp.Update();
+    m_file_activity.Update();
+}
+
+void ProgressBox::AddDownloadedBytes(s64 bytes) {
+    SCOPED_MUTEX(&m_mutex);
+    if (m_download_activity.GetMs() >= IdleTransferMs) {
+        m_download_sample_bytes = m_download_bytes;
+        m_download_speed = 0;
+        m_download_sample.Update();
+    }
+    m_download_bytes += bytes;
+    m_download_activity.Update();
+    const auto seconds = m_download_sample.GetSecondsD();
+    if (seconds >= 1.) {
+        m_download_speed = static_cast<s64>((m_download_bytes - m_download_sample_bytes) / seconds);
+        m_download_sample_bytes = m_download_bytes;
+        m_download_sample.Update();
+    }
+}
+
+void ProgressBox::EndStreamingDownload() {
+    SCOPED_MUTEX(&m_mutex);
+    m_streaming_download = false;
+}
+
 auto ProgressBox::Update(Controller* controller, TouchInfo* touch) -> void {
     Widget::Update(controller, touch);
 
@@ -145,19 +194,13 @@ auto ProgressBox::Draw(NVGcontext* vg, Theme* theme) -> void {
     mutexLock(&m_mutex);
     std::vector<u8> image_data{};
     std::swap(m_image_data, image_data);
-    if (m_timestamp.GetSeconds()) {
-        m_timestamp.Update();
-        m_speed = m_offset - m_last_offset;
-        m_last_offset = m_offset;
-    }
 
     const auto action = m_action;
     const auto title = m_title;
     const auto transfer = m_transfer;
     const auto size = m_size;
     const auto offset = m_offset;
-    const auto speed = m_speed;
-    const auto last_offset = m_last_offset;
+    const auto speed = m_file_activity.GetMs() < IdleTransferMs ? m_speed : 0;
     auto image = m_image;
 
     if (m_is_image_pending) {
@@ -206,22 +249,23 @@ auto ProgressBox::Draw(NVGcontext* vg, Theme* theme) -> void {
         const auto rad = 15;
         gfx::drawSpinner(vg, theme, prog_bar.x - pad - rad, prog_bar.y + prog_bar.h / 2, rad, armTicksToNs(armGetSystemTick()) / 1e+9);
 
-        const auto left = size - last_offset;
-        const auto left_seconds = left / speed;
-        const auto hours = left_seconds / (60 * 60);
-        const auto minutes = left_seconds % (60 * 60) / 60;
-        const auto seconds = left_seconds % 60;
+        if (speed > 0) {
+            const auto left_seconds = static_cast<size_t>(std::max<s64>(0, size - offset) / speed);
+            const auto hours = left_seconds / (60 * 60);
+            const auto minutes = left_seconds % (60 * 60) / 60;
+            const auto seconds = left_seconds % 60;
 
-        char time_str[64];
-        if (hours) {
-            std::snprintf(time_str, sizeof(time_str), "%zu hours %zu minutes remaining"_i18n.c_str(), hours, minutes);
-        } else if (minutes) {
-            std::snprintf(time_str, sizeof(time_str), "%zu minutes %zu seconds remaining"_i18n.c_str(), minutes, seconds);
-        } else {
-            std::snprintf(time_str, sizeof(time_str), "%zu seconds remaining"_i18n.c_str(), seconds);
+            char time_str[64];
+            if (hours) {
+                std::snprintf(time_str, sizeof(time_str), "%zu hours %zu minutes remaining"_i18n.c_str(), hours, minutes);
+            } else if (minutes) {
+                std::snprintf(time_str, sizeof(time_str), "%zu minutes %zu seconds remaining"_i18n.c_str(), minutes, seconds);
+            } else {
+                std::snprintf(time_str, sizeof(time_str), "%zu seconds remaining"_i18n.c_str(), seconds);
+            }
+
+            gfx::drawTextArgs(vg, center_x, prog_bar.y + prog_bar.h + 30, 18, NVG_ALIGN_CENTER | NVG_ALIGN_TOP, theme->GetColour(ThemeEntryID_TEXT), "%s (%s)", time_str, utils::formatSizeNetwork(speed).c_str());
         }
-
-        gfx::drawTextArgs(vg, center_x, prog_bar.y + prog_bar.h + 30, 18, NVG_ALIGN_CENTER | NVG_ALIGN_TOP, theme->GetColour(ThemeEntryID_TEXT), "%s (%s)", time_str, utils::formatSizeNetwork(speed).c_str());
     }
 
     gfx::drawTextArgs(vg, center_x, m_pos.y + 40, 24, NVG_ALIGN_CENTER | NVG_ALIGN_TOP, theme->GetColour(ThemeEntryID_TEXT), action.c_str());
@@ -302,7 +346,9 @@ auto ProgressBox::NewTransfer(const std::string& transfer)  -> ProgressBox& {
     m_size = 0;
     m_offset = 0;
     m_last_offset = 0;
+    m_speed = 0;
     m_timestamp.Update();
+    m_file_activity.Update();
     return *this;
 }
 
@@ -311,12 +357,26 @@ auto ProgressBox::ResetTranfser() -> ProgressBox& {
     m_size = 0;
     m_offset = 0;
     m_last_offset = 0;
+    m_speed = 0;
     m_timestamp.Update();
+    m_file_activity.Update();
     return *this;
 }
 
 auto ProgressBox::UpdateTransfer(s64 offset, s64 size)  -> ProgressBox& {
     SCOPED_MUTEX(&m_mutex);
+    if (offset != m_offset) {
+        if (offset < m_offset || m_file_activity.GetMs() >= IdleTransferMs) {
+            m_last_offset = offset;
+            m_speed = 0;
+            m_timestamp.Update();
+        } else if (const auto seconds = m_timestamp.GetSecondsD(); seconds >= 1.) {
+            m_speed = static_cast<s64>((offset - m_last_offset) / seconds);
+            m_last_offset = offset;
+            m_timestamp.Update();
+        }
+        m_file_activity.Update();
+    }
     m_size = size;
     m_offset = offset;
     return *this;

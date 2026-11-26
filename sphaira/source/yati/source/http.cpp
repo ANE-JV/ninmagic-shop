@@ -4,6 +4,7 @@
 #include "defines.hpp"
 #include "log.hpp"
 #include "ninmagic_tls.hpp"
+#include "ui/progress_box.hpp"
 
 #include <cstdio>
 #include <charconv>
@@ -47,17 +48,20 @@ auto HttpOrigin(const std::string& url, const std::string& relative = {}) -> std
 
 } // namespace
 
-Http::Http(const std::string& url, const std::string& user, const std::string& pass, std::stop_token token, bool legacy_ownfoil)
-: m_url{url}, m_user{user}, m_pass{pass}, m_token{token}, m_legacy_ownfoil{legacy_ownfoil} {
+Http::Http(const std::string& url, const std::string& user, const std::string& pass, std::stop_token token,
+    bool legacy_ownfoil, ui::ProgressBox* progress)
+: m_url{url}, m_user{user}, m_pass{pass}, m_token{token}, m_legacy_ownfoil{legacy_ownfoil}, m_progress{progress} {
     m_curl = curl_easy_init();
     if (!m_curl) {
         m_open_result = Result_CurlFailedEasyInit;
     }
+    if (m_progress) m_progress->BeginStreamingDownload();
 }
 
 Http::~Http() {
     // the transfer's thread runs on the handle, so it is joined first.
     m_transfer.reset();
+    if (m_progress) m_progress->EndStreamingDownload();
     if (m_curl) {
         curl_easy_cleanup(m_curl);
     }
@@ -171,7 +175,11 @@ size_t Http::WriteCallback(char* data, size_t size, size_t count, void* opaque) 
     auto& self = *static_cast<Http*>(opaque);
     if (self.m_header_status >= 300 && self.m_header_status < 400) return size * count;
     if (!self.m_body_allowed) { self.m_protocol_error = true; return 0; }
-    return PushThreadData::push_thread_callback(data, size, count, self.m_transfer.get());
+    const auto accepted = PushThreadData::push_thread_callback(data, size, count, self.m_transfer.get());
+    // libcurl retries a paused block, so count each payload block only after
+    // the receiver has accepted it.
+    if (accepted && accepted != CURL_WRITEFUNC_PAUSE && self.m_progress) self.m_progress->AddDownloadedBytes(accepted);
+    return accepted;
 }
 
 Result Http::Read(void* buf, s64 off, s64 size, u64* bytes_read) {

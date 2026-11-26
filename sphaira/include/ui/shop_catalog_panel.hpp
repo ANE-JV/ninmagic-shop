@@ -21,7 +21,7 @@ struct CatalogPanelState {
     size_t sidebar_index{}, sidebar_offset{}, toolbar_index{};
     int platform_logos{};
     bool sidebar_focused{}, detail_focused{}, toolbar_focused{}, loading{}, can_update{true}, list_view{};
-    bool update_available{};
+    bool update_available{}, has_active_install{};
 };
 
 inline void CatalogLabel(NVGcontext* vg, Rect bounds, std::string_view title, float size,
@@ -96,17 +96,19 @@ inline void ConsoleRow(NVGcontext* vg, Rect bounds, std::string_view platform, i
         platform == "__unknown__" ? "Sin clasificar" : platform, 17.f, White, true, 12.5f);
 }
 
+inline void DrawAppUpdateIndicator(NVGcontext* vg, Rect bounds) {
+    nvgBeginPath(vg);
+    nvgCircle(vg, bounds.x + bounds.w - 10.f, bounds.y + bounds.h * .5f, 4.f);
+    nvgFillColor(vg, nvgRGB(60, 149, 255));
+    nvgFill(vg);
+    nvgStrokeColor(vg, nvgRGB(150, 209, 255));
+    nvgStrokeWidth(vg, 1.f);
+    nvgStroke(vg);
+}
+
 inline void DrawAppUpdateButton(NVGcontext* vg, Rect bounds, bool available) {
     Button(vg, bounds, "Actualizar app", false, false, Icon::Download, true, 17.f);
-    if (available) {
-        nvgBeginPath(vg);
-        nvgCircle(vg, bounds.x + bounds.w - 10.f, bounds.y + bounds.h * .5f, 4.f);
-        nvgFillColor(vg, nvgRGB(60, 149, 255));
-        nvgFill(vg);
-        nvgStrokeColor(vg, nvgRGB(150, 209, 255));
-        nvgStrokeWidth(vg, 1.f);
-        nvgStroke(vg);
-    }
+    if (available) DrawAppUpdateIndicator(vg, bounds);
 }
 
 // The console and desktop QA execute the same renderer with real caller state.
@@ -134,16 +136,24 @@ inline void DrawCatalogPanel(NVGcontext* vg, const CatalogPanelState& state) {
     }
     if (sidebar_focus.w > 0) FocusRing(vg,sidebar_focus);
 
-    const auto toolbar_button = [&](Rect bounds, size_t index, const char* label, Icon icon) {
-        Button(vg,bounds,label,false,false,icon,true,17.f);
-        if (state.toolbar_focused && state.toolbar_index == index) FocusRing(vg,bounds);
+    using layout::ToolbarAction;
+    const auto toolbar_button = [&](ToolbarAction action, const char* label, Icon icon) {
+        const auto index = static_cast<size_t>(action);
+        const auto bounds = layout::ToolbarButtons[index];
+        const auto active = action == ToolbarAction::InProgress && state.has_active_install;
+        const auto update_available = action == ToolbarAction::UpdateApp && state.update_available;
+        const auto ink = active ? Cyan : White;
+        Panel(vg, bounds, active ? Cyan : Border, false, 8.f);
+        DrawIcon(vg, icon, bounds.x + 13.f, bounds.y + 6.f, 20.f, ink);
+        CatalogLabel(vg, {bounds.x + 42.f, bounds.y, bounds.w - (update_available ? 59.f : 50.f), bounds.h},
+            label, 17.f, ink, true, 14.f);
+        if (update_available) DrawAppUpdateIndicator(vg, bounds);
+        if (state.toolbar_focused && state.toolbar_index == index) FocusRing(vg, bounds);
     };
-    toolbar_button(layout::Downloads,0,"Descargas",Icon::Download);
-    toolbar_button(layout::Settings,1,"Ajustes",Icon::Settings);
-    if (state.can_update) {
-        DrawAppUpdateButton(vg, layout::UpdateApp, state.update_available);
-        if (state.toolbar_focused && state.toolbar_index == 2) FocusRing(vg, layout::UpdateApp);
-    }
+    toolbar_button(ToolbarAction::Downloads, "Descargas", Icon::Download);
+    toolbar_button(ToolbarAction::InProgress, state.has_active_install ? "En curso (1)" : "En curso", Icon::Queue);
+    toolbar_button(ToolbarAction::Settings, "Ajustes", Icon::Settings);
+    if (state.can_update) toolbar_button(ToolbarAction::UpdateApp, "Actualizar app", Icon::Download);
     DrawIcon(vg,Icon::Card,layout::Storage.x,layout::Storage.y+5,22,Muted);
     CatalogLabel(vg,{layout::Storage.x+30,layout::Storage.y,layout::Storage.w-30,layout::Storage.h},
         state.storage,14,Muted,false);

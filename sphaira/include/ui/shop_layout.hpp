@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "ui/shop_style.hpp"
+#include <array>
 #include <cstddef>
 
 namespace sphaira::ui::shop::layout {
@@ -13,10 +14,16 @@ inline constexpr Rect Search{244,140,394,37};
 inline constexpr Rect Sections{646,140,123,37};
 inline constexpr Rect ViewMode{777,140,145,37};
 inline constexpr Rect Detail{936,103,320,450};
-inline constexpr Rect Downloads{362,602,176,32};
-inline constexpr Rect Settings{552,602,176,32};
-inline constexpr Rect UpdateApp{742,602,176,32};
+inline constexpr Rect Downloads{244,602,159,32};
+inline constexpr Rect InProgress{416,602,160,32};
+inline constexpr Rect Settings{590,602,159,32};
+inline constexpr Rect UpdateApp{762,602,160,32};
 inline constexpr Rect Storage{1044,602,196,32};
+enum class ToolbarAction : std::size_t { Downloads, InProgress, Settings, UpdateApp };
+inline constexpr std::array ToolbarButtons{Downloads, InProgress, Settings, UpdateApp};
+inline constexpr std::size_t ToolbarCount(bool can_update) {
+    return ToolbarButtons.size() - (can_update ? 0 : 1);
+}
 inline constexpr Rect ProfileUpdate{49,550,214,42};
 inline constexpr Rect PlatformViewport{38,159,176,422};
 inline constexpr std::size_t Columns{5};

@@ -1,3 +1,4 @@
+#include "ui/shop_navigation.hpp"
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
@@ -118,7 +119,30 @@ static void CheckPlatformSelection() {
     assert(screen.page == 0 && screen.fetch_count == 4);
 }
 
+static void CheckQueueScroll() {
+    using namespace sphaira::ui::shop;
+    QueueScroll scroll;
+    assert(VisibleQueuedGames == 10);
+    scroll.Select(0, 20);
+    assert(scroll.first == 0 && scroll.selected == 0);
+    scroll.Select(9, 20);
+    assert(scroll.first == 0 && scroll.selected == 9);
+    scroll.Select(10, 20);
+    assert(scroll.first == 1 && scroll.selected == 10);
+    scroll.ScrollTo(10, 20);
+    assert(scroll.first == 10 && scroll.selected == 10);
+    scroll.Select(19, 20);
+    assert(scroll.first + VisibleQueuedGames == 20 && scroll.selected == 19);
+    scroll.ScrollTo(25, 18);
+    assert(scroll.first == 8 && scroll.selected == 17);
+    scroll.Select(scroll.selected, 5);
+    assert(scroll.first == 0 && scroll.selected == 4);
+    scroll.ScrollTo(0, 0);
+    assert(scroll.first == 0 && scroll.selected == 0);
+}
+
 int main() {
+    CheckQueueScroll();
     sphaira::ownfoil::api::available = {"Arcade", "NES", "Nintendo Switch", "Super Nintendo"};
     Menu catalog;
     catalog.UpdateCatalogSummary();
