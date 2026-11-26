@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "app": "NinMagic Shop",
-  "version": "0.1.14",
-  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/7f536df19e082a0a8cc042aab0be7058797e8e24/releases/0.1.14/NinMagic-Shop.nro",
-  "bytes": 4718050,
-  "sha256": "279179d16e0f4d2ea67583ced863dc1706ced3c7e17eb8a53c7a62a8324a72c0",
-  "notes": "Búsqueda con y sin acentos en toda la biblioteca y dentro de cada consola. Recuperación de nombres de títulos retro por su ID."
+  "version": "0.1.15",
+  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/9c540dc927f945d26f1af8fed3c9d23e4229e1ef/releases/0.1.15/NinMagic-Shop.nro",
+  "bytes": 4802082,
+  "sha256": "f99abf15221ebc100dfc9b3887f233556a1c88b7788ee41fea73eba3d60f1c1f",
+  "notes": "Logos en el menú de consolas, fondo magenta con tonos celestes, carátulas sin sombreado lateral y punto azul cuando hay una actualización."
 }
