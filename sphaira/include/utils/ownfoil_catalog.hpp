@@ -3,12 +3,43 @@
 #include "utils/ownfoil_index.hpp"
 #include <array>
 #include <bitset>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace sphaira::ownfoil::index {
 struct ConsolidationStatus {
     std::size_t folders{}, mapped_folders{}, ambiguous_folders{}, unresolved_folders{};
 };
+
+inline bool IsPlaceholderName(std::string_view name, std::string_view id) {
+    const auto first = name.find_first_not_of(" \t\r\n");
+    if (first == name.npos) return true;
+    const auto last = name.find_last_not_of(" \t\r\n");
+    const auto value = Lower(std::string{name.substr(first, last - first + 1)});
+    const auto key = Lower(std::string{id});
+    return value == "unrecognized" || value == "unknown" || value == "unnamed package"
+        || value == key || value == "not found in titledb" || value == key + " not found in titledb";
+}
+
+// A directory listing can name packages for which the catalogue has no TitleDB
+// entry. It may only supply a name for the same app ID.
+template<class Rows>
+inline void ApplyDirectoryNames(Rows& rows, const std::vector<File>& files) {
+    std::unordered_map<std::string, std::string_view> names;
+    for (const auto& file : files) {
+        if (file.directory || (file.kind != Kind::Base && file.kind != Kind::Unknown)
+            || file.id.size() != 16 || IsPlaceholderName(file.name, file.id)) continue;
+        const auto id = Id(file.id);
+        if (id.empty()) continue;
+        const auto [entry, fresh] = names.try_emplace(id, file.name);
+        if (!fresh && entry->second != file.name) entry->second = {};
+    }
+    for (auto& row : rows) {
+        if (row.id.size() != 16 || !IsPlaceholderName(row.name, row.id)) continue;
+        const auto found = names.find(Id(row.id));
+        if (found != names.end() && !found->second.empty()) row.name = found->second;
+    }
+}
 
 struct RetroSeries {
     std::string_view prefix, platform;

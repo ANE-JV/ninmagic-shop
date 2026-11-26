@@ -1457,6 +1457,7 @@ auto BuildPageQuery(const CatalogQuery& query, std::string& variables, bool iden
             variables += ",\"appIds\":" + IdArray(query.app_ids);
             break;
         case Category::All:
+        case Category::Search: // search uses the library index
             break;
 
         case Category::NewGames:
@@ -1481,13 +1482,6 @@ auto BuildPageQuery(const CatalogQuery& query, std::string& variables, bool iden
             variables += ",\"titleIds\":" + IdArray(query.title_ids) + ",\"appIds\":" + IdArray(query.app_ids);
             break;
 
-        // an argument of its own, not a filter field: it is an OR across the
-        // name and either id, which a filter's all-AND fields can't express.
-        case Category::Search:
-            params += ",$search:String";
-            args = ",search:$search";
-            variables += ",\"search\":" + JsonString(query.search);
-            break;
     }
 
     // `total` is cheap enough for every page to ask: a HAVING would make the
@@ -1506,11 +1500,15 @@ struct PublicArtworkCacheEntry {
     std::chrono::steady_clock::time_point saved;
 };
 struct NativePlatformGroups {
-    std::unordered_map<std::string, std::vector<std::string>> ids;
-    bool confirmed_nes_collection{};
-    index::ConfirmedRetroSeries verified_retro_series{};
+    struct Game {
+        std::string id, name, platform;
+        std::string search_name;
+        bool platform_learned{};
+    };
+    std::vector<Game> games;
+    std::unordered_map<std::string, std::vector<size_t>> platforms;
 };
-struct NativeSearchCache {
+struct NativeLibraryCache {
     std::string url, user, pass, provider;
     CatalogQuery query;
     std::shared_ptr<const NativePlatformGroups> groups;
@@ -1518,8 +1516,8 @@ struct NativeSearchCache {
         return url == address && user == config.user && pass == config.pass && provider == config.artwork_search_url;
     }
 };
-std::mutex g_native_search_mutex;
-NativeSearchCache g_native_search, g_native_library;
+std::mutex g_native_library_mutex;
+NativeLibraryCache g_native_library;
 std::mutex g_public_artwork_mutex;
 std::unordered_map<std::string, PublicArtworkCacheEntry> g_public_artwork_cache;
 std::chrono::steady_clock::time_point g_public_artwork_next{};
@@ -1648,13 +1646,11 @@ auto LookupGamePresentation(const Config& config, const ShopApp& card, std::stop
 }
 
 void InvalidateCatalog(const std::string& base_url, const Config& config) {
-    std::scoped_lock lock(g_index_mutex, g_artwork_mutex, g_public_artwork_mutex, g_native_search_mutex);
+    std::scoped_lock lock(g_index_mutex, g_artwork_mutex, g_public_artwork_mutex, g_native_library_mutex);
     ++g_catalog_generation;
     const auto path = CatalogSnapshotPath(config.resolved_url.empty() ? base_url : config.resolved_url, config);
     std::remove(path.c_str());
     std::remove((path + ".bak").c_str());
-    if (g_native_search.url == base_url && g_native_search.user == config.user && g_native_search.pass == config.pass)
-        g_native_search = {};
     if (g_native_library.Account(base_url, config)) g_native_library = {};
     std::erase_if(g_public_artwork_cache, [&config](const auto& entry) { return entry.first.starts_with(config.artwork_search_url + '#'); });
     g_index_cache.Invalidate(base_url, config.user, config.pass, config.direct_catalog);
@@ -1666,11 +1662,11 @@ void InvalidateCatalog(const std::string& base_url, const Config& config) {
 
 auto CachedPlatforms(const std::string& base_url, const Config& config) -> std::vector<std::string> {
     if (!config.json_index) {
-        std::scoped_lock lock(g_native_search_mutex);
+        std::scoped_lock lock(g_native_library_mutex);
         std::vector<std::string> platforms;
         if (g_native_library.Account(base_url, config) && g_native_library.groups) {
-            for (const auto& [label, ids] : g_native_library.groups->ids)
-                if (!ids.empty()) platforms.push_back(label.empty() ? "__unknown__" : label);
+            for (const auto& [label, games] : g_native_library.groups->platforms)
+                if (!games.empty()) platforms.push_back(label.empty() ? "__unknown__" : label);
             std::sort(platforms.begin(), platforms.end());
         }
         return platforms;
@@ -1782,33 +1778,41 @@ static auto FetchNativePage(const std::string& base_url, const Config& config, s
     return true;
 }
 
+static auto FetchNativeDirectoryMetadata(const std::string& base_url, const Config& config, std::stop_token token) -> std::vector<index::File> {
+    // The same authenticated shop may also publish filenames via its Sphaira
+    // view. Only read the root; the native API remains the source of game IDs.
+    constexpr size_t limit = 16 * 1024 * 1024;
+    const auto response = curl::Api().ToMemory(curl::Url{base_url}, curl::UserPass{config.user, config.pass},
+        curl::PreemptiveAuth{true}, curl::Flags{curl::Flag_NoRedirect}, curl::StopToken{token}, curl::MemoryLimit{limit});
+    if (!response.success || response.code != 200 || response.data.empty() || token.stop_requested()) return {};
+
+    const std::string_view body(reinterpret_cast<const char*>(response.data.data()), response.data.size());
+    if (!index::IsOwnfoilDirectory(body)) return {};
+    std::vector<index::File> files;
+    std::string error;
+    if (!index::ParseHtml(body.data(), body.size(), files, error)) return {};
+    return files;
+}
+
 static auto FetchScopedNativePage(const std::string& base_url, const Config& config, std::stop_token token, const CatalogQuery& query,
     std::vector<ShopApp>& out, s64& total, std::string& error) -> bool {
-    // GraphQL can search on the server, but cannot filter by original console.
-    // Keep only ordered IDs across pages. Changing console reuses the same index.
-    const bool library = query.category == Category::All;
-    auto selection = query;
-    selection.platform.clear();
-    auto& cache = library ? g_native_library : g_native_search;
+    // Use one ordered index for browsing and search. Ownfoil's search does not
+    // fold accents, and classifying only its matches can omit retro landmarks.
+    CatalogQuery selection;
+    selection.order_field = query.order_field;
+    selection.descending = query.descending;
     std::shared_ptr<const NativePlatformGroups> groups;
-    bool collection{};
-    index::ConfirmedRetroSeries verified_retro_series{};
     {
-        std::scoped_lock lock(g_native_search_mutex);
-        if (cache.Account(base_url, config) && cache.query.SameSelection(selection)) groups = cache.groups;
-        if (g_native_library.Account(base_url, config) && g_native_library.groups) {
-            collection = g_native_library.groups->confirmed_nes_collection;
-            if (!library) verified_retro_series = g_native_library.groups->verified_retro_series;
+        std::scoped_lock lock(g_native_library_mutex);
+        if (g_native_library.Account(base_url, config) && g_native_library.query.SameSelection(selection)) {
+            groups = g_native_library.groups;
         }
     }
     if (!groups) {
-        struct Record {
-            std::string id, name, platform;
-            bool platform_learned{};
-        };
-        std::vector<Record> records;
+        auto found = std::make_shared<NativePlatformGroups>();
+        auto& games = found->games;
         auto batch = selection;
-        batch.page_size = library ? 1000 : 200;
+        batch.page_size = 1000;
         s64 consumed{}, reported{};
         for (batch.page = 1; ; ++batch.page) {
             if (token.stop_requested()) return false;
@@ -1821,50 +1825,69 @@ static auto FetchScopedNativePage(const std::string& base_url, const Config& con
             consumed += static_cast<s64>(rows.size());
             for (auto& app : rows) {
                 if (app.app_id.empty()) continue;
-                const bool needs_name = index::FindRetroSeries(app.app_id) || !index::BrandedRetroPlatform(app.name).empty();
-                auto name = needs_name ? std::move(app.name) : std::string{};
-                records.push_back({std::move(app.app_id), std::move(name), std::move(app.platform), app.platform_learned});
+                games.push_back({std::move(app.app_id), std::move(app.name), std::move(app.platform), {}, app.platform_learned});
             }
             if (consumed >= reported || rows.empty()) break;
         }
-        auto found = std::make_shared<NativePlatformGroups>();
-        const auto eligible = [](const Record&) { return true; };
-        found->verified_retro_series = index::ApplyVerifiedRetroSeries(records, config.artwork_search_url,
-            eligible, verified_retro_series);
-        found->confirmed_nes_collection = index::ApplyNinMagicCollection(records, config.artwork_search_url,
-            eligible, collection);
-        for (auto& game : records) found->ids[game.platform].push_back(std::move(game.id));
+        if (std::any_of(games.begin(), games.end(), [](const auto& game) { return index::IsPlaceholderName(game.name, game.id); })) {
+            index::ApplyDirectoryNames(games, FetchNativeDirectoryMetadata(base_url, config, token));
+            if (token.stop_requested()) return false;
+            for (auto& game : games) {
+                if (game.platform.empty()) game.platform = index::PlatformFromTags(game.name);
+            }
+        }
+        const auto eligible = [](const NativePlatformGroups::Game&) { return true; };
+        index::ApplyVerifiedRetroSeries(games, config.artwork_search_url, eligible);
+        index::ApplyNinMagicCollection(games, config.artwork_search_url, eligible);
+        for (size_t i{}; i < games.size(); ++i) {
+            auto& game = games[i];
+            game.search_name = index::SearchText(game.name);
+            found->platforms[game.platform].push_back(i);
+        }
         if (token.stop_requested()) return false;
         groups = std::move(found);
-        std::scoped_lock lock(g_native_search_mutex);
-        cache = {base_url, config.user, config.pass, config.artwork_search_url, selection, groups};
+        std::scoped_lock lock(g_native_library_mutex);
+        g_native_library = {base_url, config.user, config.pass, config.artwork_search_url, selection, groups};
     }
-    const auto label = query.platform == "__unknown__" ? std::string{} : query.platform;
-    const auto group = groups->ids.find(label);
-    if (group == groups->ids.end()) { total = 0; return true; }
-    const auto& ids = group->second;
-    total = static_cast<s64>(ids.size());
     const auto count = std::clamp<s64>(query.page_size, 1, 1000);
-    const auto first = std::max<s64>(0, query.page - 1) * count;
-    if (first >= total) return true;
-    auto page = query;
+    const auto page_index = std::max<s64>(1, query.page) - 1;
+    const auto term = index::SearchText(query.search);
+    const bool id_term = std::all_of(term.begin(), term.end(), [](char c) { return index::HexDigit(c) >= 0; });
+    const bool search = query.category == Category::Search;
+    total = 0;
+    std::vector<const NativePlatformGroups::Game*> matches;
+    const auto select = [&](const NativePlatformGroups::Game& game) {
+        if (search && game.search_name.find(term) == std::string::npos && (!id_term || index::Lower(game.id).find(term) == std::string::npos)) return;
+        if (total / count == page_index) matches.push_back(&game);
+        ++total;
+    };
+    if (query.platform.empty()) {
+        for (const auto& game : groups->games) select(game);
+    } else {
+        const auto label = query.platform == "__unknown__" ? std::string{} : query.platform;
+        if (const auto group = groups->platforms.find(label); group != groups->platforms.end()) {
+            for (const auto i : group->second) select(groups->games[i]);
+        }
+    }
+    if (token.stop_requested()) return false;
+    if (matches.empty()) return true;
+    auto page = selection;
     page.category = Category::Favorites;
-    page.page = 1;
-    page.page_size = std::min(count, total - first);
-    page.app_ids.assign(ids.begin() + first, ids.begin() + first + page.page_size);
+    page.page_size = static_cast<s64>(matches.size());
+    for (const auto* game : matches) page.app_ids.push_back(game->id);
     std::vector<ShopApp> rows;
     s64 reported{};
     if (!FetchNativePage(base_url, config, token, page, rows, reported, error)) return false;
     std::unordered_map<std::string, size_t> positions;
     for (size_t i{}; i < rows.size(); ++i) positions.emplace(rows[i].app_id, i);
-    for (const auto& id : page.app_ids) {
-        auto match = positions.find(id);
+    for (const auto* game : matches) {
+        const auto match = positions.find(game->id);
         if (match == positions.end()) continue;
         auto& row = rows[match->second];
-        // The full catalog already assigned these exact IDs to the selected console.
-        // Additional card metadata may differ and must not hide one of its games.
-        row.platform = label;
+        // Keep the same classification as the library for these exact IDs.
+        row.platform = game->platform;
         row.platform_learned = false;
+        if (index::IsPlaceholderName(row.name, row.app_id)) row.name = game->name;
         out.push_back(std::move(row));
     }
     return true;
@@ -1878,7 +1901,7 @@ auto FetchApps(const std::string& base_url, const Config& config, std::stop_toke
         || (query.category == Category::Updates && query.app_ids.empty())
         || (query.category == Category::Dlc && query.title_ids.empty())
         || (query.category == Category::Search && query.search.empty())) return true;
-    if ((query.category == Category::Search || query.category == Category::All) && !query.platform.empty())
+    if (query.category == Category::Search || query.category == Category::All)
         return FetchScopedNativePage(base_url, config, token, query, out, total, error);
     return FetchNativePage(base_url, config, token, query, out, total, error);
 }

@@ -48,6 +48,51 @@ static void TestPlatformSearch() {
     assert(results("") == Names({"Mario Kart Test", "Mario Advance Test", "Mario Classic", "Mario Mystery", "Loose Mario"}));
 }
 
+static void TestDirectoryNames() {
+    using namespace sphaira::ownfoil::index;
+    struct Row {
+        std::string id, name, platform;
+    };
+    std::vector<Row> rows{
+        {"05158000000a0000", "Unrecognized", "Game Boy Advance"},
+        {"05158000000B0000", "", ""},
+        {"05158000000C0000", "Maintained title", ""},
+        {"05158000000D0000", "05158000000d0000", ""},
+        {"05158000000E0000", "  ", ""},
+        {"05158000000F0000", " 05158000000F0000 not found in TitleDB ", ""},
+        {"0515800000100000", "Unknown", ""},
+        {"pack 05158000000A0000", "", ""},
+    };
+    std::vector<File> files;
+    const auto add = [&](std::string id, std::string name, Kind kind = Kind::Unknown) -> File& {
+        auto& file = files.emplace_back();
+        file.id = std::move(id);
+        file.name = std::move(name);
+        file.kind = kind;
+        return file;
+    };
+    add("05158000000A0000", "Pokémon Retro");
+    add("05158000000A0000", "Pokémon Retro", Kind::Base);
+    add("05158000000A0000", "Update title", Kind::Update);
+    add("05158000000A0000", "Folder title").directory = true;
+    add("05158000000B0000", "One title");
+    add("05158000000B0000", "Different title");
+    add("05158000000B0000", "One title");
+    add("05158000000C0000", "File title");
+    add("05158000000D0000", "DLC title", Kind::Dlc);
+    add("05158000000E0000", "Folder title").directory = true;
+    add("05158000000F0000", "Another game");
+    add("0515800000100000", "Unrecognized");
+    add("0000000000000000", "No identity");
+
+    ApplyDirectoryNames(rows, files);
+    assert(rows[0].name == "Pokémon Retro" && rows[0].platform == "Game Boy Advance");
+    assert(rows[1].name.empty() && rows[2].name == "Maintained title");
+    assert(rows[3].name == "05158000000d0000" && rows[4].name == "  ");
+    assert(rows[5].name == "Another game" && rows[6].name == "Unknown");
+    assert(rows[7].name.empty());
+}
+
 static void TestNesLibrary() {
     using namespace sphaira::ownfoil;
     std::vector<index::File> files;
@@ -112,6 +157,7 @@ static void TestNesLibrary() {
 
 int main(int argc, char** argv) {
     TestPlatformSearch();
+    TestDirectoryNames();
     TestNesLibrary();
     using namespace sphaira::ownfoil::index;
     const auto html = "<table><a href='Exact/'> </a><a href='Duplicate/'> </a><a href='Almost/'> </a><a href='Custom/'> </a><a href='Loose%20[0500123456780800].nsp'> </a></table>";
