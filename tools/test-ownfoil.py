@@ -58,6 +58,15 @@ def main():
         compiler_path(args.cxx, ROOT / "tools/tests/test_shop_search.cpp"),
         "-o", compiler_path(args.cxx, search_exe)], check=True)
     subprocess.run([str(search_exe.resolve())], check=True)
+    app = (ROOT / "sphaira/source/app.cpp").read_text(encoding="utf-8")
+    (args.output / "production_screen_input.inc").write_text("\n".join(definition(app, signature) for signature in (
+        "void App::Update()", "auto App::IsScreenToggleEnabled()", "auto App::IsScreenDisabled()",
+        "void App::SetScreenDisabled(")), encoding="utf-8")
+    screen_exe = args.output / ("test_shop_screen_input.exe" if sys.platform == "win32" else "test_shop_screen_input")
+    subprocess.run([args.cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-O1",
+        "-I", compiler_path(args.cxx, args.output), compiler_path(args.cxx, ROOT / "tools/tests/test_shop_screen_input.cpp"),
+        "-o", compiler_path(args.cxx, screen_exe)], check=True)
+    subprocess.run([str(screen_exe.resolve())], check=True)
     title = (ROOT / "sphaira/source/ui/menus/ownfoil_title.cpp").read_text(encoding="utf-8")
     # Exercise the production handlers with a manually released package provider.
     handlers = [(menu, "void Menu::UpdatePreview("), (menu, "void Menu::OpenSelected(")]

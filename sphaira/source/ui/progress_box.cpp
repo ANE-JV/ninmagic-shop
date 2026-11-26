@@ -299,6 +299,7 @@ auto ProgressBox::Draw(NVGcontext* vg, Theme* theme) -> void {
 auto ProgressBox::GetFooterButtons() const -> Widget::uiButtons {
     Widget::uiButtons buttons;
     const auto y = m_pos.y + m_pos.h - 40.f;
+    const bool can_turn_off = m_screen_toggle_enabled && App::IsScreenToggleEnabled();
 
     const auto add_button = [&](Button button, const std::string& hint, float center_x) {
         Widget::uiButtons entry{uiButton{button, hint}};
@@ -316,14 +317,14 @@ auto ProgressBox::GetFooterButtons() const -> Widget::uiButtons {
     };
 
     if (m_hideable) {
-        if (m_screen_toggle_enabled) {
+        if (can_turn_off) {
             add_button(Button::Y, "Screen Off"_i18n, m_pos.x + m_pos.w * (1.f / 6.f));
         }
-        add_button(Button::X, "Cancel"_i18n, m_pos.x + m_pos.w * (m_screen_toggle_enabled ? 0.5f : 0.25f));
-        add_button(Button::B, "Background"_i18n, m_pos.x + m_pos.w * (m_screen_toggle_enabled ? (5.f / 6.f) : 0.75f));
+        add_button(Button::X, "Cancel"_i18n, m_pos.x + m_pos.w * (can_turn_off ? 0.5f : 0.25f));
+        add_button(Button::B, "Background"_i18n, m_pos.x + m_pos.w * (can_turn_off ? (5.f / 6.f) : 0.75f));
     } else {
-        add_button(Button::Y, "Screen Off"_i18n, m_pos.x + m_pos.w * 0.25f);
-        add_button(Button::B, "Back"_i18n, m_pos.x + m_pos.w * 0.75f);
+        if (can_turn_off) add_button(Button::Y, "Screen Off"_i18n, m_pos.x + m_pos.w * 0.25f);
+        add_button(Button::B, "Back"_i18n, m_pos.x + m_pos.w * (can_turn_off ? 0.75f : 0.5f));
     }
     return buttons;
 }

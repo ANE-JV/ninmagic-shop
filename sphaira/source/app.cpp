@@ -1271,7 +1271,7 @@ void App::Update() {
     }
 
     const bool has_wake_input = m_controller.m_kdown || m_touch_info.is_touching || m_touch_info.is_clicked;
-    if (has_wake_input && App::IsScreenToggleEnabled() && App::IsScreenDisabled()) {
+    if (has_wake_input && App::IsScreenDisabled()) {
         App::SetScreenDisabled(false);
 
         // The input which wakes the display must not activate the hidden UI.
@@ -1415,28 +1415,20 @@ void App::ReleaseScreenToggle() {
 
 auto App::IsScreenToggleEnabled() -> bool {
     SCOPED_MUTEX(&g_screen_toggle_mutex);
-    return g_screen_toggle_ref_count != 0;
+    return g_screen_toggle_ref_count && appletGetOperationMode() == AppletOperationMode_Handheld;
 }
 
 auto App::IsScreenDisabled() -> bool {
     SCOPED_MUTEX(&g_screen_toggle_mutex);
-
-    if (!g_screen_toggle_ref_count) {
-        return false;
-    }
-
-    LblBacklightSwitchStatus status{};
-    if (R_SUCCEEDED(lblGetBacklightSwitchStatus(&status))) {
-        g_screen_disabled = status != LblBacklightSwitchStatus_Enabled;
-    }
-
-    return g_screen_disabled;
+    // Only an explicit screen-off request from the app can consume input to
+    // wake the display. The dock also turns off the built-in backlight.
+    return g_screen_toggle_ref_count && g_screen_disabled && appletGetOperationMode() == AppletOperationMode_Handheld;
 }
 
 void App::SetScreenDisabled(bool disable) {
     SCOPED_MUTEX(&g_screen_toggle_mutex);
 
-    if (!g_screen_toggle_ref_count) {
+    if (!g_screen_toggle_ref_count || (disable && appletGetOperationMode() != AppletOperationMode_Handheld)) {
         return;
     }
 

@@ -47,7 +47,7 @@ if (SWITCH2)
     endforeach()
 endif()
 
-set(sphaira_VERSION 0.1.18)
+set(sphaira_VERSION 0.1.19)
 
 project(sphaira
     VERSION ${sphaira_VERSION}
