@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "app": "NinMagic Shop",
-  "version": "0.1.18",
-  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/e040f7792f1aa0521b4184984bf66381bc374363/releases/0.1.18/NinMagic-Shop.nro",
+  "version": "0.1.19",
+  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/94000584ebc6fd75a57d8c740e14b2456f44e9d3/releases/0.1.19/NinMagic-Shop.nro",
   "bytes": 4818466,
-  "sha256": "0b17225a89efec7edf706302c268a8ac2d88a2474e06c1d3d78b9e374363d17a",
-  "notes": "Pantalla En curso con carátula, progreso, velocidad de descarga y cola desplazable de diez juegos por vista."
+  "sha256": "3cb23ac3aba9904e0bd4d1559f6bdc07ce0e61074d9e4cd3fbefd10d874810e0",
+  "notes": "Corrección de los mandos inalámbricos al instalar en modo TV. B vuelve a enviar la instalación a segundo plano. Apagar pantalla está disponible en modo portátil."
 }
