@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <iostream>
 #include <mutex>
+#include <optional>
 #include <vector>
 
 namespace {
@@ -22,7 +23,7 @@ using Mutex = std::mutex;
 
 Mutex g_screen_toggle_mutex;
 unsigned g_screen_toggle_ref_count{};
-bool g_screen_disabled{};
+std::optional<AppletOperationMode> g_screen_blanked_mode;
 
 auto appletGetOperationMode() -> AppletOperationMode { return screen.mode; }
 
@@ -84,6 +85,8 @@ struct App {
     std::vector<Widget*> m_widgets;
 
     void Update();
+    static bool AcquireScreenToggle();
+    static void ReleaseScreenToggle();
     static bool IsScreenToggleEnabled();
     static bool IsScreenDisabled();
     static void SetScreenDisabled(bool disable);
@@ -92,18 +95,21 @@ struct App {
 
 #include "production_screen_input.inc"
 
-constexpr std::uint64_t B = 1 << 1, X = 1 << 2;
+constexpr std::uint64_t B = 1 << 1, X = 1 << 2, Y = 1 << 3;
 
 struct Fixture {
     Widget widget;
     App app;
 
     explicit Fixture(AppletOperationMode mode) {
-        screen = {mode, false, 0, 0};
-        g_screen_disabled = false;
-        g_screen_toggle_ref_count = 1;
+        screen = {mode, mode == AppletOperationMode_Handheld, 0, 0};
+        assert(!App::IsScreenToggleEnabled() && !App::IsScreenDisabled());
+        assert(App::AcquireScreenToggle());
+        assert(App::IsScreenToggleEnabled() && screen.requests == 0);
         app.m_widgets.push_back(&widget);
     }
+
+    ~Fixture() { App::ReleaseScreenToggle(); }
 
     void Press(std::uint64_t input, bool forwarded) {
         app.m_controller = {input, input, 0};
@@ -117,21 +123,29 @@ void CheckDockedButtons() {
     Fixture fixture{AppletOperationMode_Console};
     fixture.Press(B, true);
     fixture.Press(X, true);
-    assert(!App::IsScreenToggleEnabled() && !App::IsScreenDisabled());
+    assert(!App::IsScreenDisabled() && !screen.backlight_on);
+
+    fixture.Press(Y, true);
     App::SetScreenDisabled(true);
-    assert(screen.requests == 0);
+    assert(App::IsScreenDisabled() && screen.requests == 0);
+    fixture.Press(B, false);
+    assert(!App::IsScreenDisabled() && screen.requests == 0);
+    fixture.Press(B, true);
+    fixture.Press(X, true);
+    fixture.Press(Y, true);
 }
 
 void CheckHandheldButtons() {
     Fixture fixture{AppletOperationMode_Handheld};
-    assert(App::IsScreenToggleEnabled());
+    screen.backlight_on = false;
     fixture.Press(B, true);
     assert(screen.requests == 0);
 
+    screen.backlight_on = true;
     screen.result = 1;
     App::SetScreenDisabled(true);
     fixture.Press(B, true);
-    assert(screen.requests == 1);
+    assert(screen.backlight_on && screen.requests == 1);
 
     screen.result = 0;
     App::SetScreenDisabled(true);
@@ -142,14 +156,30 @@ void CheckHandheldButtons() {
     assert(screen.requests == 3);
 }
 
-void CheckDockingDuringScreenOff() {
-    Fixture fixture{AppletOperationMode_Handheld};
+void CheckModeTransition(AppletOperationMode origin, AppletOperationMode target) {
+    Fixture fixture{origin};
     App::SetScreenDisabled(true);
-    assert(App::IsScreenDisabled() && screen.requests == 1);
-    screen.mode = AppletOperationMode_Console;
+    assert(App::IsScreenDisabled());
+    screen.mode = target;
     fixture.Press(B, true);
     assert(!App::IsScreenDisabled());
     fixture.Press(X, true);
+}
+
+void CheckRelease(AppletOperationMode mode) {
+    Fixture fixture{mode};
+    const bool handheld = mode == AppletOperationMode_Handheld;
+    assert(App::AcquireScreenToggle());
+    App::SetScreenDisabled(true);
+    assert(App::IsScreenDisabled() && screen.requests == (handheld ? 1 : 0));
+    App::ReleaseScreenToggle();
+    assert(App::IsScreenToggleEnabled() && App::IsScreenDisabled());
+    App::ReleaseScreenToggle();
+    assert(!App::IsScreenToggleEnabled() && !App::IsScreenDisabled());
+    App::SetScreenDisabled(true);
+    assert(!App::IsScreenDisabled());
+    assert(screen.backlight_on == handheld && screen.requests == (handheld ? 2 : 0));
+    fixture.Press(B, true);
 }
 
 } // namespace
@@ -157,6 +187,9 @@ void CheckDockingDuringScreenOff() {
 int main() {
     CheckDockedButtons();
     CheckHandheldButtons();
-    CheckDockingDuringScreenOff();
-    std::cout << "Shop docked controller and handheld wake input fixtures passed\n";
+    CheckModeTransition(AppletOperationMode_Handheld, AppletOperationMode_Console);
+    CheckModeTransition(AppletOperationMode_Console, AppletOperationMode_Handheld);
+    CheckRelease(AppletOperationMode_Console);
+    CheckRelease(AppletOperationMode_Handheld);
+    std::cout << "Shop docked and handheld screen toggle, wake and controller fixtures passed\n";
 }

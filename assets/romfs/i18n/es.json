@@ -1209,6 +1209,7 @@
   "Failed to add Homebrew search path": "No se pudo añadir la ruta de búsqueda de Homebrew",
   "Failed to remove Homebrew search path": "No se pudo eliminar la ruta de búsqueda de Homebrew",
   "Screen Off": "Apagar pantalla",
+  "Hide Image": "Ocultar imagen",
   "Browse and install titles from a self-hosted Ownfoil server.\n\nInternet connection required.": "Explora e instala títulos desde un servidor Ownfoil autoalojado.\n\nRequiere conexión a Internet.",
   "Add a server.": "Añade un servidor.",
   "Change the selected server's name, addresses or login.": "Cambia el nombre, las direcciones o el acceso del servidor elegido.",

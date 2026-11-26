@@ -60,8 +60,9 @@ def main():
     subprocess.run([str(search_exe.resolve())], check=True)
     app = (ROOT / "sphaira/source/app.cpp").read_text(encoding="utf-8")
     (args.output / "production_screen_input.inc").write_text("\n".join(definition(app, signature) for signature in (
-        "void App::Update()", "auto App::IsScreenToggleEnabled()", "auto App::IsScreenDisabled()",
-        "void App::SetScreenDisabled(")), encoding="utf-8")
+        "auto SetHandheldBacklightDisabled(", "auto App::AcquireScreenToggle()", "void App::ReleaseScreenToggle()",
+        "auto App::IsScreenToggleEnabled()", "auto App::IsScreenDisabled()", "void App::SetScreenDisabled(",
+        "void App::Update()")), encoding="utf-8")
     screen_exe = args.output / ("test_shop_screen_input.exe" if sys.platform == "win32" else "test_shop_screen_input")
     subprocess.run([args.cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-O1",
         "-I", compiler_path(args.cxx, args.output), compiler_path(args.cxx, ROOT / "tools/tests/test_shop_screen_input.cpp"),

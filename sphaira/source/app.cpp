@@ -39,6 +39,7 @@
 #include <cassert>
 #include <cstring>
 #include <ctime>
+#include <optional>
 #include <span>
 #include <dirent.h>
 
@@ -218,7 +219,16 @@ constexpr ThemeIdPair THEME_ENTRIES[] = {
 constinit App* g_app{};
 Mutex g_screen_toggle_mutex{};
 u32 g_screen_toggle_ref_count{};
-bool g_screen_disabled{};
+std::optional<AppletOperationMode> g_screen_blanked_mode;
+
+auto SetHandheldBacklightDisabled(bool disable) -> bool {
+    const auto rc = appletSetLcdBacklightOffEnabled(disable);
+    if (R_FAILED(rc)) {
+        log_write("[SCREEN] failed to set backlight state: 0x%X\n", R_VALUE(rc));
+        return false;
+    }
+    return true;
+}
 
 // SetBoostMode(). on Switch 2 FastLoad drops the gpu to its minimum and
 // CancelCpuBoostMode doesn't undo it, so the end of a boost is checked against
@@ -352,6 +362,7 @@ void on_applet_focus_state(App* app) {
 }
 
 void on_applet_operation_mode(App* app) {
+    App::SetScreenDisabled(false);
     switch (appletGetOperationMode()) {
         case AppletOperationMode_Handheld:
             log_write("[APPLET] AppletOperationMode_Handheld\n");
@@ -1316,6 +1327,15 @@ void App::Draw() {
     this->queue.submitCommands(this->framebuffer_cmdlists[slot]);
     this->queue.submitCommands(this->render_cmdlist);
     nvgBeginFrame(this->vg, s_width, s_height, 1.f);
+    if (IsScreenDisabled()) {
+        nvgBeginPath(vg);
+        nvgRect(vg, 0.f, 0.f, s_width, s_height);
+        nvgFillColor(vg, nvgRGB(0, 0, 0));
+        nvgFill(vg);
+        nvgEndFrame(vg);
+        this->queue.presentImage(this->swapchain, slot);
+        return;
+    }
     nvgScale(vg, m_scale.x, m_scale.y);
 
     // find the last menu in the list, start drawing from there
@@ -1379,17 +1399,6 @@ void App::SetBoostMode(bool enable, bool force) {
 
 auto App::AcquireScreenToggle() -> bool {
     SCOPED_MUTEX(&g_screen_toggle_mutex);
-
-    if (!g_screen_toggle_ref_count) {
-        const auto rc = lblInitialize();
-        if (R_FAILED(rc)) {
-            log_write("[SCREEN] lblInitialize() failed: 0x%X\n", R_VALUE(rc));
-            return false;
-        }
-
-        g_screen_disabled = false;
-    }
-
     g_screen_toggle_ref_count++;
     return true;
 }
@@ -1403,42 +1412,47 @@ void App::ReleaseScreenToggle() {
 
     g_screen_toggle_ref_count--;
     if (!g_screen_toggle_ref_count) {
-        const auto rc = appletSetLcdBacklightOffEnabled(false);
-        if (R_FAILED(rc)) {
-            log_write("[SCREEN] failed to restore backlight: 0x%X\n", R_VALUE(rc));
+        if (g_screen_blanked_mode == AppletOperationMode_Handheld) {
+            SetHandheldBacklightDisabled(false);
         }
-
-        g_screen_disabled = false;
-        lblExit();
+        g_screen_blanked_mode.reset();
     }
 }
 
 auto App::IsScreenToggleEnabled() -> bool {
     SCOPED_MUTEX(&g_screen_toggle_mutex);
-    return g_screen_toggle_ref_count && appletGetOperationMode() == AppletOperationMode_Handheld;
+    return g_screen_toggle_ref_count != 0;
 }
 
 auto App::IsScreenDisabled() -> bool {
     SCOPED_MUTEX(&g_screen_toggle_mutex);
     // Only an explicit screen-off request from the app can consume input to
     // wake the display. The dock also turns off the built-in backlight.
-    return g_screen_toggle_ref_count && g_screen_disabled && appletGetOperationMode() == AppletOperationMode_Handheld;
+    return g_screen_toggle_ref_count && g_screen_blanked_mode == appletGetOperationMode();
 }
 
 void App::SetScreenDisabled(bool disable) {
     SCOPED_MUTEX(&g_screen_toggle_mutex);
 
-    if (!g_screen_toggle_ref_count || (disable && appletGetOperationMode() != AppletOperationMode_Handheld)) {
+    if (!g_screen_toggle_ref_count) {
         return;
     }
 
-    const auto rc = appletSetLcdBacklightOffEnabled(disable);
-    if (R_FAILED(rc)) {
-        log_write("[SCREEN] failed to set backlight state: 0x%X\n", R_VALUE(rc));
+    std::optional<AppletOperationMode> requested_mode;
+    if (disable) {
+        requested_mode = appletGetOperationMode();
+    }
+    if (requested_mode == g_screen_blanked_mode) {
         return;
     }
 
-    g_screen_disabled = disable;
+    const bool disable_backlight = requested_mode == AppletOperationMode_Handheld;
+    if (disable_backlight || g_screen_blanked_mode == AppletOperationMode_Handheld) {
+        if (!SetHandheldBacklightDisabled(disable_backlight)) {
+            return;
+        }
+    }
+    g_screen_blanked_mode = requested_mode;
 }
 
 auto App::GetVg() -> NVGcontext* {
