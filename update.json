@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "app": "NinMagic Shop",
-  "version": "0.1.20",
-  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/7326232fa560d21b31896034a162875a7a2353b2/releases/0.1.20/NinMagic-Shop.nro",
+  "version": "0.1.21",
+  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/1115cdbd297b3cf026fd4942095a356824488664/releases/0.1.21/NinMagic-Shop.nro",
   "bytes": 4818498,
-  "sha256": "4173a1a8c0b460f2718278a29bc68940f044e660eb171ba1d123d98a4cb65f4f",
-  "notes": "Los controles B, X e Y están disponibles durante la instalación en modo TV. Y oculta la imagen de la app y cualquier botón la recupera."
+  "sha256": "0c1a2dd25983325a86574dfbba45882386f77b4b61d8f69c3b415d301dc7079b",
+  "notes": "La búsqueda encuentra Jujutsu Kaisen Cursed Clash por su nombre en inglés y conserva los archivos de la edición que ofrece tu tienda."
 }
