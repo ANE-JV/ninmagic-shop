@@ -22,6 +22,7 @@ struct ShopApp {
 std::vector<ShopApp> catalog;
 std::vector<Category> requests;
 std::vector<index::File> directory_metadata;
+std::vector<index::Artwork> public_catalog;
 size_t directory_requests{};
 bool incomplete_response{};
 bool stale_card_platform{};
@@ -61,6 +62,13 @@ bool FetchNativePage(const std::string& server, const Config&, std::stop_token, 
 auto FetchNativeDirectoryMetadata(const std::string&, const Config&, std::stop_token) -> std::vector<index::File> {
     ++directory_requests;
     return directory_metadata;
+}
+
+auto FetchPublicCatalogRecords(const std::string&, const std::string&, std::stop_token,
+    std::vector<index::Artwork>& out) -> bool {
+    // A search page may contain similar games or records from other shops.
+    out = public_catalog;
+    return true;
 }
 
 #include "production_native_groups.inc"
@@ -259,4 +267,55 @@ int main() {
     assert(fetch() && total == 0 && rows.empty() && requests.empty());
     query.search = "different name";
     assert(fetch() && total == 0 && rows.empty() && requests.empty());
+
+    // A public name can find a localized game which the authenticated shop
+    // lists under a different language. The exact native app remains the card.
+    constexpr auto japanese_title = "\u546a\u8853\u5efb\u6226 \u6226\u83ef\u53cc\u4e71";
+    constexpr auto english_title = "Jujutsu Kaisen Cursed Clash";
+    constexpr auto artbook = "Jujutsu Kaisen Cursed Clash - Digital Artbook & Soundtrack";
+    catalog = {{"0100D8301C23A000", "Nintendo Switch", artbook},
+        {"01002FC012548000", "Nintendo Switch", japanese_title},
+        {"0510800000010000", "Nintendo 3DS / 2DS", "Another title"}};
+    const auto public_title = [](std::string id, std::string name, index::Kind kind = index::Kind::Base,
+        std::string parent = {}) {
+        index::Artwork record;
+        record.id = std::move(id);
+        record.name = std::move(name);
+        record.kind = kind;
+        record.title_id = parent.empty() ? record.id : std::move(parent);
+        return record;
+    };
+    public_catalog = {public_title("01002FC012548000", english_title),
+        public_title("01002FC012548000", english_title),
+        public_title("010085401A454000", english_title),
+        public_title("0100D8301C23A000", artbook),
+        public_title("01002FC012549001", "Alternate DLC only", index::Kind::Dlc, "01002FC012548000"),
+        public_title("01002FC012548000", "Mislabelled DLC decoy", index::Kind::Dlc),
+        public_title("0510800000010000", "Alternate handheld title")};
+    config.user = "localized-titles";
+    directory_metadata.clear();
+    stale_card_platform = false;
+    query.platform = "Nintendo Switch";
+    query.page = 1;
+    query.page_size = 1;
+    query.search = "jUjUtSu kAiSeN CuRsEd ClAsH";
+    assert(fetch() && total == 2 && rows.size() == 1 && rows.front().app_id == catalog[0].app_id);
+    assert(rows.front().name == artbook);
+    query.page = 2;
+    assert(fetch() && total == 2 && rows.size() == 1 && rows.front().app_id == catalog[1].app_id);
+    assert(rows.front().name == english_title && rows.front().platform == "Nintendo Switch");
+    query.page = 1;
+    query.search = japanese_title;
+    assert(fetch() && total == 1 && rows.size() == 1 && rows.front().app_id == catalog[1].app_id);
+    assert(rows.front().name == japanese_title);
+
+    query.search = "alternate dlc only";
+    assert(fetch() && total == 0 && rows.empty() && requests.empty());
+    query.search = "mislabelled dlc";
+    assert(fetch() && total == 0 && rows.empty() && requests.empty());
+    query.search = "alternate handheld";
+    assert(fetch() && total == 0 && rows.empty() && requests.empty());
+    query.platform = "Nintendo 3DS / 2DS";
+    assert(fetch() && total == 1 && rows.size() == 1 && rows.front().app_id == catalog[2].app_id);
+    assert(rows.front().name == "Alternate handheld title");
 }

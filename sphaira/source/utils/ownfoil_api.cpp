@@ -1522,18 +1522,9 @@ std::mutex g_public_artwork_mutex;
 std::unordered_map<std::string, PublicArtworkCacheEntry> g_public_artwork_cache;
 std::chrono::steady_clock::time_point g_public_artwork_next{};
 
-auto LookupPublicArtwork(const std::string& provider, const std::string& id, std::stop_token token, ShopApp& out) -> bool {
-    ON_SCOPE_EXIT(if (!out.platform.empty()) LearnPlatform(provider, id, out.platform));
-    if (token.stop_requested() || provider.empty() || id.size() != 16 || index::Id(id) != id || !IsSafeAddress(provider)) return false;
-    const auto key = provider + '#' + id;
-    {
-        std::scoped_lock lock(g_public_artwork_mutex);
-        const auto found = g_public_artwork_cache.find(key);
-        if (found != g_public_artwork_cache.end() && std::chrono::steady_clock::now() - found->second.saved < std::chrono::minutes(15)) {
-            out = found->second.app;
-            return found->second.found;
-        }
-    }
+static auto FetchPublicCatalogRecords(const std::string& provider, const std::string& query, std::stop_token token,
+    std::vector<index::Artwork>& out) -> bool {
+    if (token.stop_requested() || provider.empty() || !IsSafeAddress(provider)) return false;
     // Reserve a slot only when issuing the request. A rapidly cancelled page
     // must not leave several seconds of empty slots in front of the next one.
     while (!token.stop_requested()) {
@@ -1548,12 +1539,32 @@ auto LookupPublicArtwork(const std::string& provider, const std::string& id, std
         svcSleepThread(25'000'000);
     }
     if (token.stop_requested()) return false;
-    const auto url = provider + (provider.find('?') == std::string::npos ? "?q=" : "&q=") + id;
+    const auto url = provider + (provider.find('?') == std::string::npos ? "?q=" : "&q=") + curl::EscapeString(query);
+    constexpr size_t max_bytes = 2 * 1024 * 1024;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     const auto response = curl::Api().ToMemory(curl::Url{url}, curl::Flags{curl::Flag_NoRedirect}, curl::StopToken{token},
-        curl::OnProgress{[](s64 total, s64 now, s64, s64) { return total <= 2 * 1024 * 1024 && now <= 2 * 1024 * 1024; }});
-    if (token.stop_requested() || !response.success || response.code != 200 || response.data.size() > 2 * 1024 * 1024) return false;
+        curl::MemoryLimit{max_bytes}, curl::OnProgress{[deadline](s64 total, s64 now, s64, s64) {
+            return total <= static_cast<s64>(max_bytes) && now <= static_cast<s64>(max_bytes)
+                && std::chrono::steady_clock::now() < deadline;
+        }});
+    if (token.stop_requested() || !response.success || response.code != 200 || response.data.size() > max_bytes) return false;
+    return index::ParseArtwork(reinterpret_cast<const char*>(response.data.data()), response.data.size(), out);
+}
+
+auto LookupPublicArtwork(const std::string& provider, const std::string& id, std::stop_token token, ShopApp& out) -> bool {
+    ON_SCOPE_EXIT(if (!out.platform.empty()) LearnPlatform(provider, id, out.platform));
+    if (token.stop_requested() || provider.empty() || id.size() != 16 || index::Id(id) != id) return false;
+    const auto key = provider + '#' + id;
+    {
+        std::scoped_lock lock(g_public_artwork_mutex);
+        const auto found = g_public_artwork_cache.find(key);
+        if (found != g_public_artwork_cache.end() && std::chrono::steady_clock::now() - found->second.saved < std::chrono::minutes(15)) {
+            out = found->second.app;
+            return found->second.found;
+        }
+    }
     std::vector<index::Artwork> records;
-    if (!index::ParseArtwork(reinterpret_cast<const char*>(response.data.data()), response.data.size(), records)) return false;
+    if (!FetchPublicCatalogRecords(provider, id, token, records)) return false;
     bool matched{};
     for (const auto& record : records) {
         if (record.id != id) continue;
@@ -1854,10 +1865,26 @@ static auto FetchScopedNativePage(const std::string& base_url, const Config& con
     const auto term = index::SearchText(query.search);
     const bool id_term = std::all_of(term.begin(), term.end(), [](char c) { return index::HexDigit(c) >= 0; });
     const bool search = query.category == Category::Search;
+    std::vector<index::Artwork> public_records;
+    std::unordered_map<std::string_view, std::string_view> alternate_names;
+    // Localized names only supplement the authenticated catalog. The exact ID
+    // must still appear in this account's library and selected platform.
+    if (search && !id_term && index::IsNinMagicArtwork(config.artwork_search_url)
+        && FetchPublicCatalogRecords(config.artwork_search_url, query.search, token, public_records)) {
+        for (const auto& record : public_records) {
+            if (record.kind == index::Kind::Base && record.id.size() == 16
+                && index::SearchText(record.name).find(term) != std::string::npos) {
+                alternate_names.try_emplace(record.id, record.name);
+            }
+        }
+    }
+    if (token.stop_requested()) return false;
     total = 0;
     std::vector<const NativePlatformGroups::Game*> matches;
     const auto select = [&](const NativePlatformGroups::Game& game) {
-        if (search && game.search_name.find(term) == std::string::npos && (!id_term || index::Lower(game.id).find(term) == std::string::npos)) return;
+        if (search && game.search_name.find(term) == std::string::npos
+            && (!id_term || index::Lower(game.id).find(term) == std::string::npos)
+            && !alternate_names.contains(game.id)) return;
         if (total / count == page_index) matches.push_back(&game);
         ++total;
     };
@@ -1887,7 +1914,12 @@ static auto FetchScopedNativePage(const std::string& base_url, const Config& con
         // Keep the same classification as the library for these exact IDs.
         row.platform = game->platform;
         row.platform_learned = false;
-        if (index::IsPlaceholderName(row.name, row.app_id)) row.name = game->name;
+        if (const auto alternate = alternate_names.find(game->id);
+            alternate != alternate_names.end() && game->search_name.find(term) == std::string::npos) {
+            row.name = alternate->second;
+        } else if (index::IsPlaceholderName(row.name, row.app_id)) {
+            row.name = game->name;
+        }
         out.push_back(std::move(row));
     }
     return true;
