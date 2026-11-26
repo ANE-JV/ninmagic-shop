@@ -26,7 +26,7 @@ struct TitlePage;
 struct ShopCardTexture;
 
 struct Menu final : grid::Menu {
-    explicit Menu(u32 flags, std::function<void()> check_update = {});
+    explicit Menu(u32 flags, std::function<void()> check_update = {}, std::function<bool()> update_available = {});
     ~Menu();
 
     auto GetShortTitle() const -> const char* override { return "NinMagic Shop"; }
@@ -135,6 +135,7 @@ private:
 
     Mode m_mode{Mode::ServerList};
     std::function<void()> m_check_update;
+    std::function<bool()> m_update_available;
     bool m_did_initial_setup{};
 
     sphaira::ownfoil::Configs m_saved{};
@@ -209,6 +210,8 @@ private:
     std::string m_preview_id{};
     u64 m_preview_changed_tick{};
     bool m_sidebar_focus{}, m_detail_focus{};
+    int m_platform_logos{};
+    bool m_platform_logos_tried{};
     size_t m_sidebar_index{};
     size_t m_sidebar_offset{};
     std::optional<size_t> m_toolbar_index{};

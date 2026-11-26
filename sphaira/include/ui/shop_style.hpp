@@ -152,13 +152,15 @@ inline void Checkbox(NVGcontext* vg, Rect r, bool checked, bool available = true
     if (checked) DrawIcon(vg, Icon::Check, r.x + 2, r.y + 2, r.w - 4, c);
 }
 inline void Background(NVGcontext* vg) {
-    Fill(vg, {0, 0, 1280, 720}, Navy, 0.f);
     nvgBeginPath(vg); nvgRect(vg, 0, 0, 1280, 720);
-    nvgFillPaint(vg, nvgRadialGradient(vg, 280, 160, 10, 670,
-        nvgRGBA(0, 93, 123, 25), nvgRGBA(0, 0, 0, 0))); nvgFill(vg);
-    nvgBeginPath(vg); nvgRect(vg, 790, 80, 490, 560);
-    nvgFillPaint(vg, nvgRadialGradient(vg, 1200, 380, 10, 400,
-        nvgRGBA(111, 22, 204, 16), nvgRGBA(0, 0, 0, 0))); nvgFill(vg);
+    nvgFillPaint(vg, nvgLinearGradient(vg, 0, 0, 1280, 720,
+        nvgRGB(104, 43, 107), nvgRGB(49, 31, 81))); nvgFill(vg);
+    nvgBeginPath(vg); nvgRect(vg, 0, 0, 1280, 720);
+    nvgFillPaint(vg, nvgRadialGradient(vg, 350, 145, 30, 770,
+        nvgRGBA(226, 98, 206, 38), nvgRGBA(226, 98, 206, 0))); nvgFill(vg);
+    nvgBeginPath(vg); nvgRect(vg, 0, 0, 1280, 720);
+    nvgFillPaint(vg, nvgRadialGradient(vg, 1125, 105, 35, 675,
+        nvgRGBA(127, 174, 255, 45), nvgRGBA(127, 174, 255, 0))); nvgFill(vg);
 }
 inline constexpr Rect AccountButton{744.f, 25.f, 160.f, 38.f};
 inline float ControllerHint(NVGcontext* vg, float x, float y, const char* key, const char* hint,

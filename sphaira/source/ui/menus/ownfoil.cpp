@@ -109,8 +109,8 @@ auto Menu::MakeTitlePage(const sphaira::ownfoil::api::ShopApp& app) -> TitlePage
     return page;
 }
 
-Menu::Menu(u32 flags, std::function<void()> check_update)
-: grid::Menu{"NinMagic Shop", flags}, m_check_update{std::move(check_update)} {
+Menu::Menu(u32 flags, std::function<void()> check_update, std::function<bool()> update_available)
+: grid::Menu{"NinMagic Shop", flags}, m_check_update{std::move(check_update)}, m_update_available{std::move(update_available)} {
     SetShopLayout();
     SetShopAccountAction([this] { if (m_mode == Mode::Home) ShowServerProfiles(); else ShowOptions(); });
     // B leaves the menu from the catalog too: the server list is reached from
@@ -189,6 +189,7 @@ Menu::Menu(u32 flags, std::function<void()> check_update)
 }
 
 Menu::~Menu() {
+    if (m_platform_logos > 0) nvgDeleteImage(App::GetVg(), m_platform_logos);
     // ~Async blocks on the worker and runs before the base Object dtor that would
     // cancel it, so the ~1.5s discovery window is cut short here rather than
     // waited out; m_page_stop drops the artwork still queued for the last page.
@@ -604,7 +605,7 @@ void Menu::Draw(NVGcontext* vg, Theme* theme) {
     shop::Text(vg, 49.f, 472.f, 15.f, shop::White, "A  Conectar tienda");
     shop::Text(vg, 49.f, 503.f, 15.f, shop::White, "X  Añadir tienda");
     shop::Text(vg, 49.f, 534.f, 15.f, shop::White, "Y  Editar selección");
-    if (m_check_update) shop::Button(vg,shop::layout::ProfileUpdate,"Actualizar app",false,false,shop::Icon::Download,true,17.f);
+    if (m_check_update) shop::DrawAppUpdateButton(vg, shop::layout::ProfileUpdate, m_update_available && m_update_available());
     shop::Text(vg, 298.f, 129.f, 31.f, shop::White, "Tus tiendas", NVG_ALIGN_LEFT | NVG_ALIGN_MIDDLE, true);
     shop::Text(vg, 299.f, 157.f, 17.f, shop::Muted, "Selecciona un perfil para conectar o editar sus datos");
     shop::Panel(vg, {296.f, 178.f, 906.f, 432.f}, shop::Border);
@@ -634,9 +635,18 @@ void Menu::Draw(NVGcontext* vg, Theme* theme) {
 }
 
 void Menu::DrawHome(NVGcontext* vg, Theme* theme) {
+    if (!m_platform_logos_tried) {
+        m_platform_logos_tried = true;
+        if (R_SUCCEEDED(romfsInit())) {
+            m_platform_logos = nvgCreateImage(vg, "romfs:/theme/shop-console-logos.png", 0);
+            romfsExit();
+        }
+    }
     shop::CatalogPanelState state;
+    state.platform_logos = m_platform_logos;
     state.list_view = m_list_view.Get();
     state.can_update = static_cast<bool>(m_check_update);
+    state.update_available = m_update_available && m_update_available();
     state.platforms = PlatformChoices();
     if (m_sidebar_index < state.platforms.size()) {
         if (m_sidebar_index < m_sidebar_offset) m_sidebar_offset = m_sidebar_index;

@@ -1,0 +1,35 @@
+NinMagic Shop console logo atlas
+===============================
+
+Asset: assets/romfs/theme/shop-console-logos.png
+
+The RetroSystem console pictograms and Systematic Nintendo Switch 2 pictogram
+are by the RetroArch Assets / Libretro contributors, licensed under Creative
+Commons Attribution 4.0 International. The atlas crops, rescales, and adjusts
+their brightness for the console menu.
+
+RetroSystem source:
+https://github.com/libretro/retroarch-assets/tree/8c918e2872482139273374ef4cc6c7aff34d7585/xmb/retrosystem/png
+Systematic source:
+https://github.com/libretro/retroarch-assets/blob/8c918e2872482139273374ef4cc6c7aff34d7585/xmb/systematic/png/Nintendo%20-%20Switch%202.png
+Upstream licensing notice:
+https://github.com/libretro/retroarch-assets/blob/8c918e2872482139273374ef4cc6c7aff34d7585/COPYING
+CC BY 4.0: https://creativecommons.org/licenses/by/4.0/
+
+Nintendo console symbols identify their corresponding platforms. The atlas
+includes the following rasterized artwork from Wikimedia Commons, whose file
+pages record the indicated copyright status:
+
+- Nintendo Switch, by Nintendo. Public domain, simple geometry. Light variant.
+  https://commons.wikimedia.org/wiki/File:Nintendo_Switch_Logo_(without_text).svg
+- Wii, by Nintendo. Public domain, text logo. Light variant.
+  https://commons.wikimedia.org/wiki/File:Wii.svg
+- Nintendo GameCube symbol, by Yoshii Lizcano. CC0 1.0.
+  https://commons.wikimedia.org/wiki/File:Nintendo_GameCube_symbol_logo.svg
+- Nintendo 3DS, by Nintendo. Public domain, text logo. Cropped light variant.
+  https://commons.wikimedia.org/wiki/File:Nintendo_3DS_logo.svg
+- Nintendo DS icon, by Nintendo. Public domain, simple geometry. Light variant.
+  https://commons.wikimedia.org/wiki/File:Nintendo_DS_Icon.svg
+
+The platform names and marks belong to their respective owners.
+The Ports pictogram was drawn for NinMagic Shop.

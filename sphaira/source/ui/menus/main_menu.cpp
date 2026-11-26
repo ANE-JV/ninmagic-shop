@@ -53,7 +53,9 @@ auto GetMenuMenuEntries() -> std::span<const MiscMenuEntry> { return SHOP_MENUS;
 MainMenu::MainMenu() {
     // Shop is always the central page; old launcher tab preferences cannot
     // route a fresh installation into unrelated system/file tools.
-    m_centre_menu = std::make_unique<ownfoil::Menu>(MenuFlag_Tab, [this] { CheckForUpdates(true); });
+    m_centre_menu = std::make_unique<ownfoil::Menu>(MenuFlag_Tab,
+        [this] { CheckForUpdates(true); },
+        [this] { return m_update_state == UpdateState::Update; });
     m_right_menu = std::make_unique<game::Menu>(MenuFlag_Tab);
     m_current_menu = m_centre_menu.get();
     SetAction(Button::START, Action{"Menú", [this] { ShowShopOptions(); }});

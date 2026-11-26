@@ -2,6 +2,7 @@
 #pragma once
 #include "ui/shop_style.hpp"
 #include "ui/shop_layout.hpp"
+#include "ui/shop_console_logos.hpp"
 #include <string>
 #include <vector>
 
@@ -18,23 +19,31 @@ struct CatalogPanelState {
     std::string platform, heading, location, search, storage, page, empty_text;
     std::string search_hint{"Buscar juegos..."};
     size_t sidebar_index{}, sidebar_offset{}, toolbar_index{};
+    int platform_logos{};
     bool sidebar_focused{}, detail_focused{}, toolbar_focused{}, loading{}, can_update{true}, list_view{};
+    bool update_available{};
 };
 
-inline void CatalogLabel(NVGcontext* vg, Rect bounds, const std::string& title, float size,
-        NVGcolor ink = White, bool bold = true) {
+inline void CatalogLabel(NVGcontext* vg, Rect bounds, std::string_view title, float size,
+        NVGcolor ink = White, bool bold = true, float minimum_size = 0.f) {
     if (title.empty()) return;
     nvgSave(vg);
     nvgIntersectScissor(vg,bounds.x,bounds.y,bounds.w,bounds.h);
     nvgFontFace(vg,bold && nvgFindFont(vg,"ShopBold")>=0 ? "ShopBold" : "Standard");
     nvgFontSize(vg,size); nvgTextAlign(vg,NVG_ALIGN_LEFT|NVG_ALIGN_MIDDLE); nvgFillColor(vg,ink);
     const auto y = bounds.y + bounds.h * .5f;
-    if(nvgTextBounds(vg,0,0,title.c_str(),nullptr,nullptr) <= bounds.w) {
-        nvgText(vg,bounds.x,y,title.c_str(),nullptr);
+    const auto* end = title.data() + title.size();
+    auto width = nvgTextBounds(vg,0,0,title.data(),end,nullptr);
+    if (width > bounds.w && minimum_size > 0.f) {
+        nvgFontSize(vg, std::max(minimum_size, size * (bounds.w - 4.f) / width));
+        width = nvgTextBounds(vg,0,0,title.data(),end,nullptr);
+    }
+    if(width <= bounds.w) {
+        nvgText(vg,bounds.x,y,title.data(),end);
     } else {
         const auto dots = nvgTextBounds(vg,0,0,"…",nullptr,nullptr);
         NVGtextRow row{};
-        if(nvgTextBreakLines(vg,title.c_str(),nullptr,bounds.w-dots,&row,1)) {
+        if(nvgTextBreakLines(vg,title.data(),end,bounds.w-dots,&row,1)) {
             const auto x = nvgText(vg,bounds.x,y,row.start,row.end);
             nvgText(vg,x,y,"…",nullptr);
         }
@@ -49,9 +58,7 @@ inline void CatalogArtwork(NVGcontext* vg, Rect area, const CatalogCard& item, b
         const auto scale = std::min(area.w / width, area.h / height);
         const auto w = width * scale, h = height * scale;
         if (grid && area.w - w > 6.f) {
-            // Carry the cover's colour into the side margins while keeping the complete artwork visible.
-            ImageCover(vg,area,item.image,4.f);
-            Fill(vg,area,nvgRGBA(3,12,24,184),4.f);
+            Fill(vg, area, nvgRGB(81, 49, 100), 4.f);
         }
         ImageCover(vg,{area.x+(area.w-w)*.5f,area.y+(area.h-h)*.5f,w,h},item.image,grid?4.f:2.f);
         return;
@@ -64,6 +71,43 @@ inline void CatalogArtwork(NVGcontext* vg, Rect area, const CatalogCard& item, b
         Text(vg,area.x+area.w*.5f,y+side+11.f,13.f,Muted,item.loading?"Cargando…":"Sin carátula",NVG_ALIGN_CENTER|NVG_ALIGN_MIDDLE);
 }
 
+inline void ConsoleRow(NVGcontext* vg, Rect bounds, std::string_view platform, int logos, bool active) {
+    if (active) {
+        const auto tint = nvgLinearGradient(vg, bounds.x, bounds.y, bounds.x + bounds.w, bounds.y,
+            nvgRGB(4, 88, 108), nvgRGB(8, 46, 66));
+        nvgBeginPath(vg);
+        nvgRoundedRect(vg, bounds.x, bounds.y, bounds.w, bounds.h, 7.f);
+        nvgFillPaint(vg, tint);
+        nvgFill(vg);
+        Outline(vg, bounds, Cyan, 1.2f, 7.f);
+        nvgBeginPath(vg);
+        nvgCircle(vg, bounds.x + bounds.w - 9.f, bounds.y + bounds.h * .5f, 2.5f);
+        nvgFillColor(vg, Cyan);
+        nvgFill(vg);
+    } else {
+        Fill(vg, bounds, Alpha(PanelTop, .64f), 7.f);
+    }
+    const Rect badge{bounds.x + 6.f, bounds.y + 3.f, 34.f, bounds.h - 6.f};
+    Fill(vg, badge, Alpha(Navy, .84f), 5.f);
+    const auto side = badge.h;
+    DrawConsoleLogo(vg, {badge.x + (badge.w - side) * .5f, badge.y, side, side}, logos, platform);
+    CatalogLabel(vg, {bounds.x + 48.f, bounds.y, bounds.w - 61.f, bounds.h},
+        platform == "__unknown__" ? "Sin clasificar" : platform, 17.f, White, true, 12.5f);
+}
+
+inline void DrawAppUpdateButton(NVGcontext* vg, Rect bounds, bool available) {
+    Button(vg, bounds, "Actualizar app", false, false, Icon::Download, true, 17.f);
+    if (available) {
+        nvgBeginPath(vg);
+        nvgCircle(vg, bounds.x + bounds.w - 10.f, bounds.y + bounds.h * .5f, 4.f);
+        nvgFillColor(vg, nvgRGB(60, 149, 255));
+        nvgFill(vg);
+        nvgStrokeColor(vg, nvgRGB(150, 209, 255));
+        nvgStrokeWidth(vg, 1.f);
+        nvgStroke(vg);
+    }
+}
+
 // The console and desktop QA execute the same renderer with real caller state.
 inline void DrawCatalogPanel(NVGcontext* vg, const CatalogPanelState& state) {
     Panel(vg,layout::Sidebar,Cyan);
@@ -73,15 +117,12 @@ inline void DrawCatalogPanel(NVGcontext* vg, const CatalogPanelState& state) {
     const auto visible=layout::VisiblePlatforms;
     const auto offset=std::min(state.sidebar_offset,count>visible?count-visible:0);
     Rect sidebar_focus{};
-    const auto sidebar_button = [&](Rect bounds, size_t index, const char* text, bool active, Icon icon, bool show_icon, float size) {
-        Button(vg,bounds,text,false,active,icon,show_icon,size);
-        if (state.sidebar_focused && state.sidebar_index == index) sidebar_focus = bounds;
-    };
     for(size_t row=0;row<visible&&offset+row<count;++row) {
         const auto index=offset+row;
         const auto& label=state.platforms[index];
-        sidebar_button(layout::PlatformRow(row),index,label=="__unknown__"?"Sin clasificar":label.c_str(),
-            state.platform==label,Icon::Folder,false,16);
+        const auto bounds = layout::PlatformRow(row);
+        ConsoleRow(vg, bounds, label, state.platform_logos, state.platform == label);
+        if (state.sidebar_focused && state.sidebar_index == index) sidebar_focus = bounds;
     }
     if (count > visible) {
         const Rect track{219, layout::PlatformViewport.y, 3, layout::PlatformViewport.h};
@@ -98,7 +139,10 @@ inline void DrawCatalogPanel(NVGcontext* vg, const CatalogPanelState& state) {
     };
     toolbar_button(layout::Downloads,0,"Descargas",Icon::Download);
     toolbar_button(layout::Settings,1,"Ajustes",Icon::Settings);
-    if (state.can_update) toolbar_button(layout::UpdateApp,2,"Actualizar app",Icon::Download);
+    if (state.can_update) {
+        DrawAppUpdateButton(vg, layout::UpdateApp, state.update_available);
+        if (state.toolbar_focused && state.toolbar_index == 2) FocusRing(vg, layout::UpdateApp);
+    }
     DrawIcon(vg,Icon::Card,layout::Storage.x,layout::Storage.y+5,22,Muted);
     CatalogLabel(vg,{layout::Storage.x+30,layout::Storage.y,layout::Storage.w-30,layout::Storage.h},
         state.storage,14,Muted,false);
