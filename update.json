@@ -1,9 +1,9 @@
 {
   "schema": 1,
   "app": "NinMagic Shop",
-  "version": "0.1.19",
-  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/94000584ebc6fd75a57d8c740e14b2456f44e9d3/releases/0.1.19/NinMagic-Shop.nro",
-  "bytes": 4818466,
-  "sha256": "3cb23ac3aba9904e0bd4d1559f6bdc07ce0e61074d9e4cd3fbefd10d874810e0",
-  "notes": "Corrección de los mandos inalámbricos al instalar en modo TV. B vuelve a enviar la instalación a segundo plano. Apagar pantalla está disponible en modo portátil."
+  "version": "0.1.20",
+  "download_url": "https://raw.githubusercontent.com/ANE-JV/ninmagic-shop/7326232fa560d21b31896034a162875a7a2353b2/releases/0.1.20/NinMagic-Shop.nro",
+  "bytes": 4818498,
+  "sha256": "4173a1a8c0b460f2718278a29bc68940f044e660eb171ba1d123d98a4cb65f4f",
+  "notes": "Los controles B, X e Y están disponibles durante la instalación en modo TV. Y oculta la imagen de la app y cualquier botón la recupera."
 }
