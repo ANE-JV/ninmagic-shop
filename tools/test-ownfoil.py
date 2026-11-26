@@ -14,6 +14,10 @@ def compiler_path(compiler, path):
         return "/" + value[0].lower() + value[2:]
     return value
 
+def definition(source, signature):
+    start = source.index(signature)
+    return source[start:source.index("\n}", start) + 2]
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--yyjson", type=Path, required=True, help="Pinned yyjson src containing yyjson.c and yyjson.h")
@@ -45,8 +49,9 @@ def main():
     menu = (ROOT / "sphaira/source/ui/menus/ownfoil.cpp").read_text(encoding="utf-8")
     start = menu.index("auto Menu::SearchScope(")
     end = menu.index("\nvoid Menu::", menu.index("void Menu::ShowSearch(", start) + 1)
-    platforms = menu[menu.index("void Menu::UpdateCatalogSummary("):menu.index("void Menu::SelectPlatform(")]
-    (args.output / "production_show_search.inc").write_text(menu[start:end] + "\n" + platforms, encoding="utf-8")
+    platforms = [definition(menu, signature) for signature in (
+        "void Menu::UpdateCatalogSummary(", "void Menu::SelectPlatform(", "void Menu::ActivateSidebar(")]
+    (args.output / "production_show_search.inc").write_text("\n".join([menu[start:end], *platforms]), encoding="utf-8")
     search_exe = args.output / ("test_shop_search.exe" if sys.platform == "win32" else "test_shop_search")
     subprocess.run([args.cxx, "-std=c++20", "-Wall", "-Wextra", "-Werror", "-O1",
         "-I", compiler_path(args.cxx, args.output), compiler_path(args.cxx, ROOT / "tools/tests/test_shop_search.cpp"),
@@ -54,9 +59,6 @@ def main():
     subprocess.run([str(search_exe.resolve())], check=True)
     title = (ROOT / "sphaira/source/ui/menus/ownfoil_title.cpp").read_text(encoding="utf-8")
     # Exercise the production handlers with a manually released package provider.
-    def definition(source, signature):
-        start = source.index(signature)
-        return source[start:source.index("\n}", start) + 2]
     handlers = [(menu, "void Menu::UpdatePreview("), (menu, "void Menu::OpenSelected(")]
     handlers += [(title, signature) for signature in (
         "bool HasDownload(", "auto FormatVersion(", "auto FormatInstallVersion(", "void TitleMenu::OpenFullPage(",

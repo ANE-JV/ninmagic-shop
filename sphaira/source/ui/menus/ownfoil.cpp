@@ -320,7 +320,7 @@ void Menu::SelectPlatform(const std::string& platform) {
     // Consoles refer to the shop library, even when a legacy folder was open.
     if (!m_directory_stack.empty()) m_base_url = m_directory_stack.front();
     m_directory_stack.clear(); m_folder_names.clear();
-    m_sidebar_focus = false; m_detail_focus = false;
+    m_detail_focus = false;
     m_toolbar_index.reset();
     FreeEntries(); m_pending_page.reset(); LoadPage(0);
 }

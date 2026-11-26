@@ -55,12 +55,13 @@ inline void CatalogArtwork(NVGcontext* vg, Rect area, const CatalogCard& item, b
     int width{}, height{};
     if (item.image > 0) nvgImageSize(vg,item.image,&width,&height);
     if (!item.directory && width > 0 && height > 0) {
+        if (grid) {
+            ImageCover(vg, area, item.image, 4.f);
+            return;
+        }
         const auto scale = std::min(area.w / width, area.h / height);
         const auto w = width * scale, h = height * scale;
-        if (grid && area.w - w > 6.f) {
-            Fill(vg, area, nvgRGB(81, 49, 100), 4.f);
-        }
-        ImageCover(vg,{area.x+(area.w-w)*.5f,area.y+(area.h-h)*.5f,w,h},item.image,grid?4.f:2.f);
+        ImageCover(vg, {area.x + (area.w - w) * .5f, area.y + (area.h - h) * .5f, w, h}, item.image, 2.f);
         return;
     }
     const auto icon = item.directory ? Icon::Folder : Icon::Queue;

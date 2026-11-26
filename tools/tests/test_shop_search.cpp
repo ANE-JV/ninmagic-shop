@@ -38,6 +38,7 @@ struct Menu {
     std::vector<Entry> m_entries;
     int m_config{}, m_catalog_status{};
     bool m_consolidated{true}, m_connecting{}, m_sidebar_focus{}, m_detail_focus{};
+    std::size_t m_sidebar_index{};
     std::optional<std::size_t> m_toolbar_index;
     std::optional<int> m_pending_page;
     int fetch_count{};
@@ -46,9 +47,12 @@ struct Menu {
     void SetMode(Mode) {}
     void SetCatalogTitle() {}
     void LoadPage(s64 requested) { ++fetch_count; page = requested; }
+    auto PlatformChoices() const -> const std::vector<std::string>& { return m_platform_choices; }
     auto SearchScope() const -> std::string;
     void ShowSearch(s64 index);
     void UpdateCatalogSummary();
+    void SelectPlatform(const std::string& platform);
+    void ActivateSidebar();
 };
 
 // Built from the product's ShowSearch definition by test-ownfoil.py. Only the
@@ -75,6 +79,43 @@ static void CheckScope(Menu screen, const std::string& expected_label) {
     swkbd::answer = "not accepted";
     screen.ShowSearch(4);
     assert(screen.m_search == "mario" && screen.fetch_count == 1);
+}
+
+static void CheckPlatformSelection() {
+    Menu screen;
+    screen.m_platform_choices = {"Nintendo Switch", "NES", "Super Nintendo"};
+    screen.m_platform = "Nintendo Switch";
+    screen.m_sidebar_focus = true;
+    screen.m_sidebar_index = 1;
+    screen.m_detail_focus = true;
+    screen.m_toolbar_index = 0;
+    screen.m_category = 4;
+    screen.m_search = "mario";
+    screen.m_pending_page = 3;
+    screen.page = 2;
+    screen.m_consolidated = false;
+    screen.m_directory_stack = {screen.m_base_url};
+    screen.m_base_url += "old-folder/";
+    screen.m_folder_names = {"old-folder"};
+
+    screen.ActivateSidebar();
+    assert(screen.m_platform == "NES" && screen.m_sidebar_focus && screen.m_sidebar_index == 1);
+    assert(!screen.m_detail_focus && !screen.m_toolbar_index);
+    assert(screen.m_category == 0 && screen.m_search.empty() && !screen.m_pending_page);
+    assert(screen.m_consolidated && screen.m_directory_stack.empty() && screen.m_folder_names.empty());
+    assert(screen.m_base_url == "https://shop.invalid/" && screen.page == 0 && screen.fetch_count == 1);
+
+    screen.ActivateSidebar();
+    assert(screen.m_platform == "NES" && screen.m_sidebar_focus && screen.fetch_count == 2);
+    screen.m_sidebar_index = 2;
+    screen.ActivateSidebar();
+    assert(screen.m_platform == "Super Nintendo" && screen.m_sidebar_focus && screen.m_sidebar_index == 2);
+    assert(screen.fetch_count == 3);
+
+    screen.m_sidebar_focus = false;
+    screen.SelectPlatform("Nintendo Switch");
+    assert(screen.m_platform == "Nintendo Switch" && !screen.m_sidebar_focus && screen.m_sidebar_index == 0);
+    assert(screen.page == 0 && screen.fetch_count == 4);
 }
 
 int main() {
@@ -104,5 +145,6 @@ int main() {
     screen.m_folder_names = {"GBA"};
     screen.m_base_url = "https://shop.invalid/GBA/";
     CheckScope(screen, "GBA");
-    std::cout << "Search action retained its console, directory or whole-library scope\n";
+    CheckPlatformSelection();
+    std::cout << "Search scope and sidebar focus retained when changing console\n";
 }
